@@ -25,3 +25,26 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Docker
+
+Para construir e iniciar o protótipo na porta 3000:
+
+```bash
+docker compose up --build -d
+```
+
+Depois, acesse `http://localhost:3000`.
+
+Para utilizar outra porta no computador:
+
+```bash
+APP_PORT=8080 docker compose up --build -d
+```
+
+Para acompanhar ou encerrar:
+
+```bash
+docker compose logs -f
+docker compose down
+```

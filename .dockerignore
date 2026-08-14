@@ -1,0 +1,17 @@
+.git
+.gitignore
+.dockerignore
+Dockerfile*
+compose*.yaml
+node_modules
+dist
+.next
+.vinext
+.wrangler
+coverage
+outputs
+work
+.env
+.env.*
+npm-debug.log*
+*.tar.gz
