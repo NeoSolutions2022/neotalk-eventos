@@ -6,6 +6,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 FROM dependencies AS builder
+ARG NEXT_PUBLIC_AVATAR_WIDGET_URL=http://localhost:8080/widget
+ENV NEXT_PUBLIC_AVATAR_WIDGET_URL=$NEXT_PUBLIC_AVATAR_WIDGET_URL
 COPY . .
 RUN npm run build
 

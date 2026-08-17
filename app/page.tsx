@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type View = "dashboard" | "instances" | "packages" | "billing" | "studio" | "login" | "register";
+type AvatarId = "lia" | "asuna";
+
+const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "http://localhost:8080/widget";
 
 const nav = [
   { id: "dashboard" as View, icon: "⌂", label: "Visão geral" },
@@ -133,5 +136,120 @@ function Billing({ onSave }: { onSave: () => void }) {
 }
 
 function Studio({ recording, setRecording, time, playerMode, setPlayerMode, showToast }: { recording: boolean; setRecording: (value: boolean) => void; time: string; playerMode: "complete" | "compact"; setPlayerMode: (value: "complete" | "compact") => void; showToast: (value: string) => void }) {
-  return <><div className="studio-heading"><div><button className="back">←</button><div><p className="eyebrow">NOVA INSTÂNCIA</p><h1>Estúdio de tradução</h1></div></div><div className="studio-status"><span className={recording ? "pill live" : "pill"}><i className="status-dot" />{recording ? `AO VIVO · ${time}` : "PRONTO PARA INICIAR"}</span><button className="secondary" onClick={() => showToast("Configuração salva")}>Salvar configuração</button></div></div><div className="studio-grid"><section className="stage-card"><div className="stage-toolbar"><div><span className="tag">PRÉVIA</span><b>Player principal</b></div><button>⛶</button></div><div className={`live-stage ${playerMode}`}><div className="stage-brand">neo<strong>talk</strong></div><div className="figure large"><i className="head" /><i className="body" /><i className="hand left" /><i className="hand right" /></div><div className="live-captions">{recording ? "É uma satisfação receber todos vocês. Hoje vamos falar sobre como a tecnologia pode tornar nossos eventos mais inclusivos." : "A legenda aparecerá aqui quando a captura de áudio começar."}</div><span className="stage-language">PT → LIBRAS</span></div><div className="capture-controls"><div className="audio-source"><span>⌁</span><div><small>ENTRADA DE ÁUDIO</small><b>Microfone padrão</b></div><button>⌄</button></div><button className={recording ? "record stop" : "record"} onClick={() => setRecording(!recording)}><i />{recording ? "Encerrar captura" : "Iniciar captura"}</button></div></section><aside className="studio-panel"><div className="panel-tabs"><button className="active">Configuração</button><button>Legenda</button></div><div className="config-block"><label>Nome da instância<input defaultValue="Evento institucional 2026" /></label><label>Avatar 3D<select><option>Ana · NeoTalk</option><option>Caio · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>Ana</b><small>Avatar principal · Libras</small></div><span>✓</span></div></div><div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div><div className="config-block"><div className="block-title"><b>Transmitir</b><small>Escolha onde abrir o player.</small></div><button className="output-button" onClick={() => showToast("Player aberto em nova janela")}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={() => showToast("Link copiado") }><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div></aside></div></>;
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [avatar, setAvatar] = useState<AvatarId>("lia");
+  const [avatarReady, setAvatarReady] = useState(false);
+  const [avatarStatus, setAvatarStatus] = useState("Conectando ao avatar");
+  const [avatarError, setAvatarError] = useState("");
+  const [phrase, setPhrase] = useState("É uma satisfação receber todos vocês. Hoje vamos falar sobre acessibilidade.");
+  const [widgetUrl] = useState(() => {
+    const url = new URL(avatarWidgetBase);
+    url.searchParams.set("avatar", "lia");
+    url.searchParams.set("loop", "1");
+    url.searchParams.set("background", "#10233f");
+    return url.toString();
+  });
+  const widgetOrigin = new URL(avatarWidgetBase).origin;
+
+  const sendToAvatar = (message: Record<string, unknown>) => {
+    if (!avatarReady || !frameRef.current?.contentWindow) return false;
+    frameRef.current.contentWindow.postMessage(message, widgetOrigin);
+    return true;
+  };
+
+  useEffect(() => {
+    const statusLabels: Record<string, string> = {
+      loading_avatar: "Carregando avatar 3D",
+      ready: "Avatar conectado",
+      queued: "Tradução na fila",
+      processing: "Preparando sinais",
+      loading_pose: "Carregando movimentos",
+      playing: "Avatar sinalizando",
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== widgetOrigin || event.source !== frameRef.current?.contentWindow) return;
+      const data = event.data as { type?: string; status?: string; message?: string };
+
+      if (data.type === "neotalk:ready") {
+        setAvatarReady(true);
+        setAvatarError("");
+        setAvatarStatus("Avatar conectado");
+        frameRef.current?.contentWindow?.postMessage({ type: "neotalk:set-avatar", avatar }, widgetOrigin);
+      } else if (data.type === "neotalk:status" && data.status) {
+        setAvatarStatus(statusLabels[data.status] || data.status);
+      } else if (data.type === "neotalk:playing") {
+        setAvatarStatus("Avatar sinalizando");
+      } else if (data.type === "neotalk:error") {
+        setAvatarError(data.message || "Não foi possível executar a tradução no avatar.");
+        setAvatarStatus("Avatar indisponível");
+      }
+    };
+
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [avatar, widgetOrigin]);
+
+  const selectAvatar = (value: AvatarId) => {
+    setAvatar(value);
+    if (sendToAvatar({ type: "neotalk:set-avatar", avatar: value })) {
+      setAvatarStatus("Trocando avatar");
+    }
+  };
+
+  const signPhrase = () => {
+    if (!phrase.trim()) {
+      showToast("Digite uma frase para o avatar");
+      return false;
+    }
+    if (!sendToAvatar({ type: "neotalk:sign", phrase: phrase.trim() })) {
+      showToast("Aguarde o avatar terminar de carregar");
+      return false;
+    }
+    setAvatarError("");
+    setAvatarStatus("Enviando tradução");
+    return true;
+  };
+
+  const toggleRecording = () => {
+    if (!recording && !signPhrase()) return;
+    if (recording) sendToAvatar({ type: "neotalk:pause" });
+    setRecording(!recording);
+  };
+
+  const copyPlayerLink = async () => {
+    try {
+      await navigator.clipboard.writeText(widgetUrl);
+      showToast("Link do player copiado");
+    } catch {
+      showToast("Não foi possível copiar o link");
+    }
+  };
+
+  return <>
+    <div className="studio-heading">
+      <div><button className="back">←</button><div><p className="eyebrow">NOVA INSTÂNCIA</p><h1>Estúdio de tradução</h1></div></div>
+      <div className="studio-status"><span className={recording ? "pill live" : "pill"}><i className="status-dot" />{recording ? `AO VIVO · ${time}` : "PRONTO PARA INICIAR"}</span><button className="secondary" onClick={() => showToast("Configuração salva")}>Salvar configuração</button></div>
+    </div>
+    <div className="studio-grid">
+      <section className="stage-card">
+        <div className="stage-toolbar"><div><span className="tag">PRÉVIA</span><b>Player principal</b><span className={`avatar-health ${avatarReady ? "connected" : ""}`}><i />{avatarStatus}</span></div><button onClick={() => frameRef.current?.requestFullscreen()}>⛶</button></div>
+        <div className={`live-stage ${playerMode}`}>
+          <iframe ref={frameRef} className="avatar-widget-frame" title="Avatar 3D NeoTalk" src={widgetUrl} allow="fullscreen" />
+          <div className="stage-brand">neo<strong>talk</strong></div>
+          <div className="live-captions">{recording ? phrase : "A legenda aparecerá aqui quando a captura de áudio começar."}</div>
+          <span className="stage-language">PT → LIBRAS</span>
+          {avatarError && <div className="avatar-error">{avatarError}</div>}
+        </div>
+        <div className="capture-controls"><div className="audio-source"><span>⌁</span><div><small>ENTRADA DE ÁUDIO</small><b>Microfone padrão</b></div><button>⌄</button></div><button className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{recording ? "Encerrar captura" : "Iniciar captura"}</button></div>
+      </section>
+      <aside className="studio-panel">
+        <div className="panel-tabs"><button className="active">Configuração</button><button>Legenda</button></div>
+        <div className="config-block"><label>Nome da instância<input defaultValue="Evento institucional 2026" /></label><label>Avatar 3D<select value={avatar} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatar === "lia" ? "Lia" : "Asuna"}</b><small>Avatar 3D conectado · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
+        <div className="config-block"><div className="block-title"><b>Testar tradução</b><small>Envie uma frase diretamente ao avatar.</small></div><label>Frase<textarea value={phrase} onChange={(event) => setPhrase(event.target.value)} rows={3} /></label><button className="secondary wide sign-button" onClick={signPhrase} disabled={!avatarReady}>Sinalizar frase no avatar</button></div>
+        <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
+        <div className="config-block"><div className="block-title"><b>Transmitir</b><small>Escolha onde abrir o player.</small></div><button className="output-button" onClick={() => { window.open(widgetUrl, "_blank", "noopener,noreferrer"); showToast("Player aberto em nova janela"); }}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div>
+      </aside>
+    </div>
+  </>;
 }
