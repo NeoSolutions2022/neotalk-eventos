@@ -22,7 +22,7 @@ type AvatarMessage = { type?: string; status?: string; message?: string; words?:
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
 
-const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "http://localhost:8080/widget";
+const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const liveRoomsApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {

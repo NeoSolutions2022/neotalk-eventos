@@ -6,7 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 FROM dependencies AS builder
-ARG NEXT_PUBLIC_AVATAR_WIDGET_URL=http://localhost:8080/widget
+ARG NEXT_PUBLIC_AVATAR_WIDGET_URL=https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 ENV NEXT_PUBLIC_AVATAR_WIDGET_URL=$NEXT_PUBLIC_AVATAR_WIDGET_URL \
     NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL

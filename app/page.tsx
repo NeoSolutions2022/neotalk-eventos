@@ -7,7 +7,7 @@ import Rooms from "./Rooms";
 type View = "dashboard" | "instances" | "packages" | "billing" | "studio" | "login" | "register";
 type AvatarId = "lia" | "asuna";
 
-const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "http://localhost:8080/widget";
+const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 
 const nav = [
   { id: "dashboard" as View, icon: "⌂", label: "Visão geral" },

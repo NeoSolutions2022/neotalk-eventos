@@ -41,7 +41,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_AVATAR_WIDGET_URL: "${NEXT_PUBLIC_AVATAR_WIDGET_URL:-http://localhost:8080/widget}"
+        NEXT_PUBLIC_AVATAR_WIDGET_URL: "${NEXT_PUBLIC_AVATAR_WIDGET_URL:-https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget}"
         NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}"
     container_name: neotalk-eventos
     ports:

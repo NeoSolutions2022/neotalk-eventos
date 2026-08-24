@@ -39,6 +39,7 @@ test("keeps live capture, persistence and Docker services connected", async () =
   assert.match(liveRoom, /webkitSpeechRecognition/);
   assert.match(liveRoom, /getUserMedia\(\{ audio: true \}\)/);
   assert.match(liveRoom, /wordBufferRef\.current\.length >= 12/);
+  assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);
   assert.match(liveRoom, /\/rooms\/\$\{roomId\}\/batches/);
   assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
   assert.match(compose, /postgres:16-alpine/);

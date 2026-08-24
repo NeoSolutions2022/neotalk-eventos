@@ -54,7 +54,7 @@ Esse comando inicia três serviços:
 
 Depois, acesse `http://localhost:3000`.
 
-Por padrão, o frontend usa `http://localhost:8080/widget`. Para apontar para outra implantação do avatar, defina `NEXT_PUBLIC_AVATAR_WIDGET_URL` durante o build.
+Por padrão, o frontend usa o widget oficial em `https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget`. Para apontar para outra implantação do avatar, defina `NEXT_PUBLIC_AVATAR_WIDGET_URL` durante o build.
 
 O frontend usa `http://localhost:8000/api/v1` para o histórico das salas. A URL pode ser alterada com `NEXT_PUBLIC_API_URL` durante o build.
 
