@@ -8,10 +8,11 @@ Protótipo visual navegável para gerenciamento de traduções em Libras.
 - Painel de saldo e consumo de horas
 - Histórico de instâncias de tradução
 - Pacotes de horas e dados de pagamento
-- Estúdio com captura simulada, legenda e o widget real do Avatar3DFrontend
+- Salas ao vivo com captura real do microfone, legenda contínua e o widget do Avatar3DFrontend
+- Envio automático da fala em lotes de até 12 palavras para a fila da Lia
 - Opções visuais para abrir ou compartilhar o player
 
-O widget do avatar já está conectado por `iframe` e `postMessage`. As integrações de captura real de áudio, pagamento e transmissão ainda estão representadas visualmente nesta etapa.
+O widget do avatar está conectado por `iframe` e `postMessage`. No Chrome e no Edge, a sala usa o reconhecimento de voz do navegador em português (`pt-BR`), fecha lotes após uma pausa curta ou 12 palavras e os envia sequencialmente ao avatar. Pagamento e transmissão externa ainda estão representados visualmente nesta etapa.
 
 ## Desenvolvimento
 

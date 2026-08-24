@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import LiveRoom from "./LiveRoom";
 
 type View = "dashboard" | "instances" | "packages" | "billing" | "studio" | "login" | "register";
 type AvatarId = "lia" | "asuna";
@@ -9,7 +10,7 @@ const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "http://lo
 
 const nav = [
   { id: "dashboard" as View, icon: "⌂", label: "Visão geral" },
-  { id: "instances" as View, icon: "◉", label: "Traduções" },
+  { id: "instances" as View, icon: "◉", label: "Salas ao vivo" },
   { id: "packages" as View, icon: "◷", label: "Pacotes e uso" },
   { id: "billing" as View, icon: "▣", label: "Pagamento" },
 ];
@@ -98,7 +99,7 @@ export default function Home() {
           {view === "instances" && <Instances onCreate={() => setView("studio")} />}
           {view === "packages" && <Packages onBuy={() => setView("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
-          {view === "studio" && <Studio recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} />}
+          {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} />}
         </div>
       </section>
       {toast && <div className="toast"><span>✓</span>{toast}</div>}
@@ -112,19 +113,19 @@ function Logo({ dark = false }: { dark?: boolean }) {
 
 function Dashboard({ onCreate, onViewAll }: { onCreate: () => void; onViewAll: () => void }) {
   return <>
-    <div className="page-heading"><div><p className="eyebrow">SEXTA-FEIRA, 14 DE AGOSTO</p><h1>Olá, Marina <span>👋</span></h1><p>Veja como está o uso da sua conta e continue traduzindo.</p></div><button className="primary" onClick={onCreate}><span>＋</span> Nova tradução</button></div>
+    <div className="page-heading"><div><p className="eyebrow">SEXTA-FEIRA, 14 DE AGOSTO</p><h1>Olá, Marina <span>👋</span></h1><p>Veja como está o uso da sua conta e continue traduzindo.</p></div><button className="primary" onClick={onCreate}><span>＋</span> Criar sala ao vivo</button></div>
     <section className="summary-grid">
       <article className="balance-card"><div className="card-top"><span className="card-icon lime">◷</span><span className="pill good">Saldo disponível</span></div><div><strong>12h <small>35min</small></strong><p>de 20 horas contratadas</p></div><div className="progress"><i style={{ width: "63%" }} /></div><div className="progress-label"><span>63% disponível</span><span>7h 25min utilizadas</span></div></article>
       <article className="stat-card"><span className="card-icon sky">◉</span><div><p>Traduções realizadas</p><strong>18</strong><small><b>↗ 12%</b> nos últimos 30 dias</small></div></article>
       <article className="stat-card"><span className="card-icon purple">⌁</span><div><p>Tempo transmitido</p><strong>7h 25min</strong><small>este mês</small></div></article>
     </section>
-    <section className="quick-section"><div className="section-title"><div><h2>Comece uma tradução</h2><p>Configure seu ambiente em poucos passos.</p></div></div><div className="quick-card"><div className="quick-copy"><span className="step-number">01</span><div><h3>Nova instância de tradução</h3><p>Capture o áudio, gere legendas ao vivo e conecte seu avatar 3D.</p><div className="features"><span>✓ Legenda em tempo real</span><span>✓ Avatar 3D integrado</span><span>✓ Player compartilhável</span></div><button className="primary" onClick={onCreate}>Configurar tradução <span>→</span></button></div></div><div className="mini-stage"><div className="stage-top"><span><i /> AO VIVO</span><small>00:42:18</small></div><div className="figure"><i className="head" /><i className="body" /><i className="hand left" /><i className="hand right" /></div><div className="fake-caption">Bem-vindos ao nosso evento.<br />É um prazer ter vocês aqui.</div></div></div></section>
-    <section className="history"><div className="section-title"><div><h2>Traduções recentes</h2><p>Últimas instâncias utilizadas pela sua equipe.</p></div><button className="secondary" onClick={onViewAll}>Ver todas →</button></div><div className="table"><div className="table-head"><span>INSTÂNCIA</span><span>DATA</span><span>DURAÇÃO</span><span>STATUS</span><span /></div>{instances.map((item) => <div className="table-row" key={item.name}><span><i className="row-icon">◉</i><b>{item.name}</b></span><span>{item.date}</span><span>{item.duration}</span><span><i className="status-dot" />{item.status}</span><button>•••</button></div>)}</div></section>
+    <section className="quick-section"><div className="section-title"><div><h2>Tradução em tempo real</h2><p>Abra uma sala e comece a falar.</p></div></div><div className="quick-card"><div className="quick-copy"><span className="step-number">01</span><div><h3>Nova sala de tradução</h3><p>Capture o microfone, gere legendas ao vivo e envie cada trecho falado para a Lia.</p><div className="features"><span>✓ Microfone em tempo real</span><span>✓ Lia 3D integrada</span><span>✓ Frases enviadas em lotes</span></div><button className="primary" onClick={onCreate}>Criar sala ao vivo <span>→</span></button></div></div><div className="mini-stage"><div className="stage-top"><span><i /> AO VIVO</span><small>00:42:18</small></div><div className="figure"><i className="head" /><i className="body" /><i className="hand left" /><i className="hand right" /></div><div className="fake-caption">Bem-vindos ao nosso evento.<br />É um prazer ter vocês aqui.</div></div></div></section>
+    <section className="history"><div className="section-title"><div><h2>Salas recentes</h2><p>Últimas transmissões ao vivo da sua equipe.</p></div><button className="secondary" onClick={onViewAll}>Ver todas →</button></div><div className="table"><div className="table-head"><span>SALA</span><span>DATA</span><span>DURAÇÃO</span><span>STATUS</span><span /></div>{instances.map((item) => <div className="table-row" key={item.name}><span><i className="row-icon">◉</i><b>{item.name}</b></span><span>{item.date}</span><span>{item.duration}</span><span><i className="status-dot" />{item.status}</span><button>•••</button></div>)}</div></section>
   </>;
 }
 
 function Instances({ onCreate }: { onCreate: () => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">GERENCIAMENTO</p><h1>Suas traduções</h1><p>Crie, acompanhe e reutilize configurações de transmissão.</p></div><button className="primary" onClick={onCreate}>＋ Nova tradução</button></div><div className="filter-bar"><div className="search">⌕ <input placeholder="Buscar instância..." /></div><button className="secondary">Todas as datas ⌄</button><button className="secondary">Todos os status ⌄</button></div><div className="instance-grid">{[...instances, { name: "Workshop de liderança", date: "02 ago, 08:00", duration: "01h 35min", status: "Finalizada" }].map((item, index) => <article className="instance-card" key={item.name}><div className="instance-cover"><span className="instance-number">0{index + 1}</span><div className="tiny-figure"><i/><i/></div><span className="pill good"><i className="status-dot" /> {item.status}</span></div><h3>{item.name}</h3><p>{item.date}</p><div className="instance-meta"><span>◷ {item.duration}</span><span>CC Legendas</span></div><button className="secondary wide">Ver detalhes</button></article>)}</div></>;
+  return <><div className="page-heading"><div><p className="eyebrow">TRANSMISSÕES</p><h1>Salas ao vivo</h1><p>Crie uma sala, capture o microfone e acompanhe as sessões realizadas.</p></div><button className="primary" onClick={onCreate}>＋ Criar sala ao vivo</button></div><div className="filter-bar"><div className="search">⌕ <input placeholder="Buscar sala..." /></div><button className="secondary">Todas as datas ⌄</button><button className="secondary">Todos os status ⌄</button></div><div className="instance-grid">{[...instances, { name: "Workshop de liderança", date: "02 ago, 08:00", duration: "01h 35min", status: "Finalizada" }].map((item, index) => <article className="instance-card" key={item.name}><div className="instance-cover"><span className="instance-number">0{index + 1}</span><div className="tiny-figure"><i/><i/></div><span className="pill good"><i className="status-dot" /> {item.status}</span></div><h3>{item.name}</h3><p>{item.date}</p><div className="instance-meta"><span>◷ {item.duration}</span><span>CC Legendas</span></div><button className="secondary wide">Ver detalhes</button></article>)}</div></>;
 }
 
 function Packages({ onBuy }: { onBuy: () => void }) {
