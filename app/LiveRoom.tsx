@@ -199,8 +199,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         avatarReadyRef.current = true;
         setAvatarReady(true);
         setAvatarError("");
-        setAvatarStatus("Lia conectada");
-        frameRef.current?.contentWindow?.postMessage({ type: "neotalk:set-avatar", avatar }, widgetOrigin);
+        setAvatarStatus(`${avatar === "lia" ? "Lia" : "Asuna"} conectada`);
         window.setTimeout(dispatchNextBatch, 200);
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(statusLabels[data.status] || data.status);
