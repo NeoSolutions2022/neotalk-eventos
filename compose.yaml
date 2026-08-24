@@ -1,14 +1,55 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: neotalk-postgres
+    environment:
+      POSTGRES_DB: neotalk
+      POSTGRES_USER: neotalk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-neotalk_local}
+    volumes:
+      - neotalk_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neotalk -d neotalk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: neotalk-api
+    environment:
+      DATABASE_URL: postgresql://neotalk:${POSTGRES_PASSWORD:-neotalk_local}@postgres:5432/neotalk
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
   neotalk-eventos:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_AVATAR_WIDGET_URL: "${NEXT_PUBLIC_AVATAR_WIDGET_URL:-http://localhost:8080/widget}"
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}"
     container_name: neotalk-eventos
     ports:
       - "${APP_PORT:-3000}:3000"
     restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -19,3 +60,6 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+
+volumes:
+  neotalk_postgres_data:

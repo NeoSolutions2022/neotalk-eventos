@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import LiveRoom from "./LiveRoom";
+import Rooms from "./Rooms";
 
 type View = "dashboard" | "instances" | "packages" | "billing" | "studio" | "login" | "register";
 type AvatarId = "lia" | "asuna";
@@ -96,7 +97,7 @@ export default function Home() {
         </header>
         <div className="content">
           {view === "dashboard" && <Dashboard onCreate={() => setView("studio")} onViewAll={() => setView("instances")} />}
-          {view === "instances" && <Instances onCreate={() => setView("studio")} />}
+          {view === "instances" && <Rooms onCreate={() => setView("studio")} />}
           {view === "packages" && <Packages onBuy={() => setView("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
           {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} />}
