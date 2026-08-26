@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
+import QualityAdmin from "./QualityAdmin";
 
-type View = "dashboard" | "instances" | "packages" | "billing" | "studio" | "login" | "register";
+type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "login" | "register";
 type AvatarId = "lia" | "asuna";
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
@@ -14,6 +15,7 @@ const nav = [
   { id: "instances" as View, icon: "◉", label: "Salas ao vivo" },
   { id: "packages" as View, icon: "◷", label: "Pacotes e uso" },
   { id: "billing" as View, icon: "▣", label: "Pagamento" },
+  { id: "quality" as View, icon: "◇", label: "Qualidade" },
 ];
 
 const instances = [
@@ -100,6 +102,7 @@ export default function Home() {
           {view === "instances" && <Rooms onCreate={() => setView("studio")} />}
           {view === "packages" && <Packages onBuy={() => setView("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
+          {view === "quality" && <QualityAdmin showToast={showToast} />}
           {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} />}
         </div>
       </section>
@@ -125,6 +128,7 @@ function Dashboard({ onCreate, onViewAll }: { onCreate: () => void; onViewAll: (
   </>;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function Instances({ onCreate }: { onCreate: () => void }) {
   return <><div className="page-heading"><div><p className="eyebrow">TRANSMISSÕES</p><h1>Salas ao vivo</h1><p>Crie uma sala, capture o microfone e acompanhe as sessões realizadas.</p></div><button className="primary" onClick={onCreate}>＋ Criar sala ao vivo</button></div><div className="filter-bar"><div className="search">⌕ <input placeholder="Buscar sala..." /></div><button className="secondary">Todas as datas ⌄</button><button className="secondary">Todos os status ⌄</button></div><div className="instance-grid">{[...instances, { name: "Workshop de liderança", date: "02 ago, 08:00", duration: "01h 35min", status: "Finalizada" }].map((item, index) => <article className="instance-card" key={item.name}><div className="instance-cover"><span className="instance-number">0{index + 1}</span><div className="tiny-figure"><i/><i/></div><span className="pill good"><i className="status-dot" /> {item.status}</span></div><h3>{item.name}</h3><p>{item.date}</p><div className="instance-meta"><span>◷ {item.duration}</span><span>CC Legendas</span></div><button className="secondary wide">Ver detalhes</button></article>)}</div></>;
 }
@@ -137,6 +141,7 @@ function Billing({ onSave }: { onSave: () => void }) {
   return <><div className="page-heading"><div><p className="eyebrow">CONTA</p><h1>Pagamento</h1><p>Mantenha os dados de cobrança e o método de pagamento atualizados.</p></div></div><div className="billing-grid"><section className="form-card"><div className="section-title"><div><h2>Dados de cobrança</h2><p>Informações utilizadas nos seus comprovantes.</p></div><span className="secure">● Ambiente seguro</span></div><div className="form-grid"><label className="full">Razão social<input defaultValue="Aurora Eventos e Tecnologia LTDA" /></label><label>CNPJ<input defaultValue="12.345.678/0001-90" /></label><label>Telefone<input defaultValue="(85) 99999-4400" /></label><label className="full">Endereço<input defaultValue="Av. Desembargador Moreira, 1800" /></label><label>Cidade<input defaultValue="Fortaleza" /></label><label>Estado<select defaultValue="CE"><option>CE</option><option>SP</option></select></label></div><hr/><div className="section-title"><div><h2>Método de pagamento</h2><p>Cartão principal para novas compras.</p></div></div><div className="credit-card"><span>neo<strong>talk</strong></span><i>•••• •••• •••• 8240</i><div><small>MARINA ALMEIDA</small><small>08/29</small></div></div><div className="form-grid"><label className="full">Número do cartão<input defaultValue="•••• •••• •••• 8240" /></label><label>Validade<input defaultValue="08/29" /></label><label>Código de segurança<input defaultValue="•••" /></label></div><button className="primary" onClick={onSave}>Salvar alterações</button></section><aside className="billing-side"><h3>Resumo da conta</h3><div><span>Plano atual</span><b>Profissional · 20h</b></div><div><span>Próxima renovação</span><b>01 set 2026</b></div><div><span>Saldo disponível</span><b className="green">12h 35min</b></div><hr/><p>Seus dados são protegidos e usados somente para processar compras e emitir comprovantes.</p><button className="link">Ver histórico de pagamentos →</button></aside></div></>;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function Studio({ recording, setRecording, time, playerMode, setPlayerMode, showToast }: { recording: boolean; setRecording: (value: boolean) => void; time: string; playerMode: "complete" | "compact"; setPlayerMode: (value: "complete" | "compact") => void; showToast: (value: string) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [avatar, setAvatar] = useState<AvatarId>("lia");

@@ -28,12 +28,14 @@ test("server-renders the NeoTalk live rooms product", async () => {
   assert.doesNotMatch(html, /Your site is taking shape|Building your site/);
 });
 
-test("keeps live capture, persistence and Docker services connected", async () => {
-  const [liveRoom, rooms, compose, api] = await Promise.all([
+test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
+  const [liveRoom, quality, rooms, compose, api, services] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/QualityAdmin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/Rooms.tsx", import.meta.url), "utf8"),
     readFile(new URL("../compose.yaml", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/main.py", import.meta.url), "utf8"),
+    readFile(new URL("../backend/app/services.py", import.meta.url), "utf8"),
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
@@ -41,9 +43,17 @@ test("keeps live capture, persistence and Docker services connected", async () =
   assert.match(liveRoom, /wordBufferRef\.current\.length >= 12/);
   assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);
   assert.match(liveRoom, /\/rooms\/\$\{roomId\}\/batches/);
+  assert.match(liveRoom, /\/agent\/translate/);
+  assert.match(liveRoom, /agent\.gloss_text/);
+  assert.match(quality, /\/admin\/quality-runs/);
+  assert.match(quality, /neotalk:sign/);
   assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms"/);
   assert.match(api, /@app\.patch\("\/api\/v1\/batches\/\{batch_id\}"/);
+  assert.match(api, /@app\.post\("\/api\/v1\/admin\/quality-runs"/);
+  assert.match(api, /@app\.post\("\/api\/v1\/admin\/dataset\/sync"/);
+  assert.match(services, /OPENAI_BASE_URL.*api\.openai\.com\/v1/);
+  assert.match(services, /NEOTALK_VIDEO_SUBMIT_PATH/);
 });

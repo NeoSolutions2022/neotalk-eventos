@@ -1,39 +1,39 @@
+name: neotalk-eventos
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: neotalk-postgres
     environment:
       POSTGRES_DB: neotalk
       POSTGRES_USER: neotalk
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-neotalk_local}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - neotalk_postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U neotalk -d neotalk"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
 
   api:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: neotalk-api
     environment:
-      DATABASE_URL: postgresql://neotalk:${POSTGRES_PASSWORD:-neotalk_local}@postgres:5432/neotalk
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-      NEOTALK_API_KEY: ${NEOTALK_API_KEY:-}
+      DATABASE_URL: postgresql://neotalk:${POSTGRES_PASSWORD}@postgres:5432/neotalk
+      CORS_ORIGINS: ${APP_PUBLIC_ORIGIN}
+      NEOTALK_API_KEY: ${NEOTALK_API_KEY}
       NEOTALK_API_BASE_URL: ${NEOTALK_API_BASE_URL:-https://infra-neotalk-api.k3p3ex.easypanel.host}
       NEOTALK_API_TIMEOUT_SECONDS: ${NEOTALK_API_TIMEOUT_SECONDS:-30}
       NEOTALK_MVP_POSE_FPS: ${NEOTALK_MVP_POSE_FPS:-24}
       NEOTALK_VIDEO_SUBMIT_PATH: ${NEOTALK_VIDEO_SUBMIT_PATH:-/sign-process-type}
       NEOTALK_VIDEO_STATUS_PATH: ${NEOTALK_VIDEO_STATUS_PATH:-/task-status-type/{task_id}}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
-    ports:
-      - "${API_PORT:-8000}:8000"
+    expose:
+      - "8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,33 +42,31 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
       interval: 10s
       timeout: 5s
-      start_period: 10s
-      retries: 5
+      start_period: 15s
+      retries: 8
 
-  neotalk-eventos:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_AVATAR_WIDGET_URL: "${NEXT_PUBLIC_AVATAR_WIDGET_URL:-https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget}"
-        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}"
-    container_name: neotalk-eventos
-    ports:
-      - "${APP_PORT:-3000}:3000"
-    restart: unless-stopped
+        NEXT_PUBLIC_AVATAR_WIDGET_URL: ${NEXT_PUBLIC_AVATAR_WIDGET_URL:-https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget}
+        NEXT_PUBLIC_API_URL: ${API_PUBLIC_ORIGIN}/api/v1
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    expose:
+      - "3000"
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
     healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
-      start_period: 15s
-      retries: 3
+      start_period: 20s
+      retries: 5
 
 volumes:
-  neotalk_postgres_data:
+  postgres_data:

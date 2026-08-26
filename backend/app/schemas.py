@@ -25,6 +25,10 @@ class BatchCreate(BaseModel):
 class BatchUpdate(BaseModel):
     status: BatchStatus
     error_message: str | None = Field(default=None, max_length=2000)
+    gloss_text: str | None = Field(default=None, max_length=2000)
+    prompt_id: UUID | None = None
+    model: str | None = Field(default=None, max_length=80)
+    agent_latency_ms: int | None = Field(default=None, ge=0)
 
 
 class BatchOut(BaseModel):
@@ -35,6 +39,10 @@ class BatchOut(BaseModel):
     word_count: int
     status: str
     error_message: str | None
+    gloss_text: str | None = None
+    prompt_id: UUID | None = None
+    model: str | None = None
+    agent_latency_ms: int | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
@@ -55,3 +63,24 @@ class RoomOut(BaseModel):
 
 class RoomDetail(RoomOut):
     batches: list[BatchOut]
+
+
+class AgentTranslateIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    batch_id: UUID | None = None
+
+
+class PromptCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    instructions: str = Field(min_length=20, max_length=20000)
+    activate: bool = True
+
+
+class QualityRunCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class QualityRatingCreate(BaseModel):
+    output: Literal["video", "avatar", "comparison"]
+    score: int = Field(ge=1, le=5)
+    notes: str | None = Field(default=None, max_length=4000)
