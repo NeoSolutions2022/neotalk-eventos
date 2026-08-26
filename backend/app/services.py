@@ -1,7 +1,6 @@
 import json
 import os
 import time
-from dataclasses import dataclass
 
 import asyncpg
 import httpx
@@ -16,6 +15,14 @@ NEOTALK_VIDEO_STATUS_PATH = os.getenv("NEOTALK_VIDEO_STATUS_PATH", "/task-status
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2500"))
+OPENAI_RETRY_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_RETRY_MAX_OUTPUT_TOKENS", "5000"))
+
+
+class AgentResponseIncomplete(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def integration_status() -> dict:
@@ -74,6 +81,32 @@ def _output_text(payload: dict) -> str:
     raise HTTPException(status_code=502, detail="O agente não retornou conteúdo estruturado.")
 
 
+def _parse_agent_payload(payload: dict) -> dict:
+    response_status = payload.get("status")
+    if response_status == "incomplete":
+        reason = (payload.get("incomplete_details") or {}).get("reason", "unknown")
+        raise AgentResponseIncomplete(str(reason))
+    if response_status not in (None, "completed"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"O agente terminou com status inesperado: {response_status}.",
+        )
+    try:
+        result = json.loads(_output_text(payload))
+    except json.JSONDecodeError as exc:
+        raise AgentResponseIncomplete("invalid_json") from exc
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="O agente retornou uma estrutura inválida.")
+    return result
+
+
+def _openai_error_message(response: httpx.Response) -> str:
+    try:
+        return response.json().get("error", {}).get("message", "Falha ao consultar o agente GPT.")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return "Falha ao consultar o agente GPT."
+
+
 async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY não configurada no backend.")
@@ -87,14 +120,15 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
     instructions = (
         f"{prompt['instructions']}\n\nCATÁLOGO AUTORIZADO ({len(catalog)} palavras):\n"
         + " | ".join(catalog)
+        + "\n\nResponda somente no formato solicitado e mantenha reasoning_summary curto, com no máximo duas frases."
     )
     body = {
         "model": OPENAI_MODEL,
         "instructions": instructions,
         "input": text,
         "store": False,
-        "max_output_tokens": 800,
         "text": {
+            "verbosity": "low",
             "format": {
                 "type": "json_schema",
                 "name": "neotalk_gloss_translation",
@@ -112,18 +146,39 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
         },
     }
     started = time.perf_counter()
+    response_payload: dict | None = None
+    result: dict | None = None
+    token_limits = (
+        OPENAI_MAX_OUTPUT_TOKENS,
+        max(OPENAI_RETRY_MAX_OUTPUT_TOKENS, OPENAI_MAX_OUTPUT_TOKENS * 2),
+    )
     async with httpx.AsyncClient(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
-        response = await client.post(
-            f"{OPENAI_BASE_URL}/responses",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-            json=body,
-        )
+        for attempt, max_output_tokens in enumerate(token_limits):
+            response = await client.post(
+                f"{OPENAI_BASE_URL}/responses",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={**body, "max_output_tokens": max_output_tokens},
+            )
+            if response.status_code >= 400:
+                raise HTTPException(status_code=502, detail=_openai_error_message(response))
+            try:
+                response_payload = response.json()
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=502, detail="A API do agente retornou uma resposta inválida.") from exc
+            try:
+                result = _parse_agent_payload(response_payload)
+                break
+            except AgentResponseIncomplete as exc:
+                if attempt + 1 < len(token_limits):
+                    continue
+                if exc.reason == "max_output_tokens":
+                    detail = "O agente excedeu o limite de saída mesmo após uma nova tentativa."
+                else:
+                    detail = "O agente retornou conteúdo incompleto mesmo após uma nova tentativa."
+                raise HTTPException(status_code=502, detail=detail) from exc
     latency_ms = round((time.perf_counter() - started) * 1000)
-    if response.status_code >= 400:
-        message = response.json().get("error", {}).get("message", "Falha ao consultar o agente GPT.")
-        raise HTTPException(status_code=502, detail=message)
-    response_payload = response.json()
-    result = json.loads(_output_text(response_payload))
+    if response_payload is None or result is None:
+        raise HTTPException(status_code=502, detail="O agente não concluiu a tradução.")
     allowed = set(catalog)
     requested = [str(word).strip().upper() for word in result.get("glosses", []) if str(word).strip()]
     glosses = [word for word in requested if word in allowed]

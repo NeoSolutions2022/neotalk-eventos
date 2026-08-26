@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+__pycache__/
+*.py[cod]
+/.tmp-backend-test-deps/
 
 # next.js
 /.next/
