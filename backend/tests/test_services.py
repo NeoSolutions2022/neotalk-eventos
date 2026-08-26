@@ -4,7 +4,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app import services
-from app.services import AgentResponseIncomplete, _parse_agent_payload
+from app.services import AgentResponseIncomplete, _parse_agent_payload, _video_path
 
 
 def response_payload(text: str, status: str = "completed", reason: str | None = None) -> dict:
@@ -21,6 +21,18 @@ def response_payload(text: str, status: str = "completed", reason: str | None = 
 
 
 class ParseAgentPayloadTests(unittest.TestCase):
+    def test_migrates_legacy_video_route(self) -> None:
+        self.assertEqual(
+            _video_path("/sign-process-type", "/sign-process-type", "/sign-process-video"),
+            "/sign-process-video",
+        )
+
+    def test_preserves_custom_video_route(self) -> None:
+        self.assertEqual(
+            _video_path("/custom-video", "/sign-process-type", "/sign-process-video"),
+            "/custom-video",
+        )
+
     def test_parses_completed_structured_output(self) -> None:
         result = _parse_agent_payload(
             response_payload('{"glosses":["CASA"],"reasoning_summary":"Tradução direta."}')

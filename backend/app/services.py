@@ -10,8 +10,23 @@ from fastapi import HTTPException
 NEOTALK_API_BASE_URL = os.getenv("NEOTALK_API_BASE_URL", "https://infra-neotalk-api.k3p3ex.easypanel.host").rstrip("/")
 NEOTALK_API_KEY = os.getenv("NEOTALK_API_KEY", "")
 NEOTALK_API_TIMEOUT_SECONDS = float(os.getenv("NEOTALK_API_TIMEOUT_SECONDS", "30"))
-NEOTALK_VIDEO_SUBMIT_PATH = os.getenv("NEOTALK_VIDEO_SUBMIT_PATH", "/sign-process-type")
-NEOTALK_VIDEO_STATUS_PATH = os.getenv("NEOTALK_VIDEO_STATUS_PATH", "/task-status-type/{task_id}")
+
+
+def _video_path(value: str, legacy: str, current: str) -> str:
+    path = value.strip() or current
+    return current if path == legacy else path
+
+
+NEOTALK_VIDEO_SUBMIT_PATH = _video_path(
+    os.getenv("NEOTALK_VIDEO_SUBMIT_PATH", "/sign-process-video"),
+    "/sign-process-type",
+    "/sign-process-video",
+)
+NEOTALK_VIDEO_STATUS_PATH = _video_path(
+    os.getenv("NEOTALK_VIDEO_STATUS_PATH", "/task-status-video/{task_id}"),
+    "/task-status-type/{task_id}",
+    "/task-status-video/{task_id}",
+)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")

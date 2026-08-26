@@ -41,4 +41,4 @@ Também é possível abrir **Qualidade** e usar o botão **Sincronizar**.
 - API: `https://neotalk-eventos-api.k3p3ex.easypanel.host/api/v1/health`
 - Documentação: `https://neotalk-eventos-api.k3p3ex.easypanel.host/docs`
 
-Observação: no host NeoTalk informado, as rotas atuais de catálogo e `.pose` estão disponíveis, mas as rotas documentadas de vídeo `/sign-process-type` e `/task-status-type` retornaram `404` na última validação. Elas permanecem configuráveis por variáveis.
+As rotas usadas para gerar e consultar o vídeo de referência são `/sign-process-video` e `/task-status-video/{task_id}`. Elas permanecem configuráveis por variáveis; valores legados terminados em `-type` são migrados automaticamente para essas rotas.
