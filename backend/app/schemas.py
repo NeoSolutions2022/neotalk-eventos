@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-AvatarId = Literal["lia", "asuna"]
+AvatarId = Literal["lia", "asuna", "elia"]
 BatchStatus = Literal["queued", "translating", "done", "error"]
 
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type AvatarId = "lia" | "asuna";
+type AvatarId = "lia" | "asuna" | "elia";
 type LiveBatch = { id: number; text: string; glossText?: string; status: "queued" | "translating" | "done" | "error" };
 type SpeechResultEvent = { resultIndex: number; results: { length: number; [index: number]: { isFinal: boolean; 0: { transcript: string } } } };
 type SpeechErrorEvent = { error: string };
@@ -25,6 +25,7 @@ type AgentTranslation = { gloss_text: string; prompt_id: string; model: string; 
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const liveRoomsApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${liveRoomsApiBase}${path}`, {
@@ -230,12 +231,12 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         avatarReadyRef.current = true;
         setAvatarReady(true);
         setAvatarError("");
-        setAvatarStatus(`${avatar === "lia" ? "Lia" : "Asuna"} conectada`);
+        setAvatarStatus(`${avatarNames[avatar]} conectada`);
         window.setTimeout(() => void dispatchNextBatch(), 200);
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(statusLabels[data.status] || data.status);
       } else if (data.type === "neotalk:playing") {
-        setAvatarStatus("Lia sinalizando o lote atual");
+        setAvatarStatus(`${avatarNames[avatar]} sinalizando o lote atual`);
         const wordCount = Array.isArray(data.words) ? data.words.length : 4;
         if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
         playbackTimerRef.current = window.setTimeout(() => completeActiveBatch("done"), Math.max(2600, wordCount * 850));
@@ -409,7 +410,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       </section>
       <aside className="studio-panel">
         <div className="panel-tabs"><button className="active">Sala</button><button>Legenda</button></div>
-        <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatar === "lia" ? "Lia" : "Asuna"}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
+        <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option><option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
         <div className="config-block live-queue"><div className="block-title"><b>Fila de tradução</b><small>Lotes de até 12 palavras · agente GPT · {processedBatches} concluídos</small><span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span></div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "translating" ? "LIA" : "FILA"}</span><p>{batch.text}{batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
         <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
         <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Abra o avatar em uma saída separada.</small></div><button className="output-button" onClick={() => { window.open(widgetUrl, "_blank", "noopener,noreferrer"); showToast("Player aberto em nova janela"); }}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div>

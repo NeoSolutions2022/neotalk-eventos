@@ -6,9 +6,10 @@ import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
 
 type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "login" | "register";
-type AvatarId = "lia" | "asuna";
+type AvatarId = "lia" | "asuna" | "elia";
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
+const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
 const nav = [
   { id: "dashboard" as View, icon: "⌂", label: "Visão geral" },
@@ -252,7 +253,7 @@ function Studio({ recording, setRecording, time, playerMode, setPlayerMode, show
       </section>
       <aside className="studio-panel">
         <div className="panel-tabs"><button className="active">Configuração</button><button>Legenda</button></div>
-        <div className="config-block"><label>Nome da instância<input defaultValue="Evento institucional 2026" /></label><label>Avatar 3D<select value={avatar} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatar === "lia" ? "Lia" : "Asuna"}</b><small>Avatar 3D conectado · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
+        <div className="config-block"><label>Nome da instância<input defaultValue="Evento institucional 2026" /></label><label>Avatar 3D<select value={avatar} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option><option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar 3D conectado · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
         <div className="config-block"><div className="block-title"><b>Testar tradução</b><small>Envie uma frase diretamente ao avatar.</small></div><label>Frase<textarea value={phrase} onChange={(event) => setPhrase(event.target.value)} rows={3} /></label><button className="secondary wide sign-button" onClick={signPhrase} disabled={!avatarReady}>Sinalizar frase no avatar</button></div>
         <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
         <div className="config-block"><div className="block-title"><b>Transmitir</b><small>Escolha onde abrir o player.</small></div><button className="output-button" onClick={() => { window.open(widgetUrl, "_blank", "noopener,noreferrer"); showToast("Player aberto em nova janela"); }}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div>

@@ -45,6 +45,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /\/rooms\/\$\{roomId\}\/batches/);
   assert.match(liveRoom, /\/agent\/translate/);
   assert.match(liveRoom, /agent\.gloss_text/);
+  assert.match(liveRoom, /option value="elia">Elia · NeoTalk/);
   assert.match(quality, /\/admin\/quality-runs/);
   assert.match(quality, /neotalk:sign/);
   assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
