@@ -19,7 +19,14 @@ from .schemas import (
     RoomFinish,
     RoomOut,
 )
-from .services import check_video, integration_status, submit_video, sync_pose_words, translate_to_glosses
+from .services import (
+    check_video,
+    integration_status,
+    invalidate_agent_context_cache,
+    submit_video,
+    sync_pose_words,
+    translate_to_glosses,
+)
 
 
 def record_dict(record: asyncpg.Record) -> dict:
@@ -88,6 +95,8 @@ async def create_prompt(payload: PromptCreate, pool: asyncpg.Pool = Depends(get_
                 """,
                 payload.name.strip(), payload.instructions.strip(), version, payload.activate,
             )
+    if payload.activate:
+        invalidate_agent_context_cache()
     return record_dict(row)
 
 
@@ -102,6 +111,7 @@ async def activate_prompt(prompt_id: UUID, pool: asyncpg.Pool = Depends(get_pool
                 "UPDATE agent_prompts SET is_active = TRUE, activated_at = NOW() WHERE id = $1 RETURNING *",
                 prompt_id,
             )
+    invalidate_agent_context_cache()
     return record_dict(row)
 
 

@@ -243,8 +243,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 .batch-item > span { display: grid; place-items: center; min-height: 21px; border-radius: 5px; background: #edf1f5; color: #7e8998; font-size: 7px; font-weight: 900; }
 .batch-item p { margin: 1px 0 0; color: #536075; font-size: 9px; line-height: 1.4; }
 .batch-item p small { display: block; margin-top: 4px; color: var(--cyan-deep); font-size: 7px; font-weight: 800; }
-.batch-item.translating { border-color: rgba(31,168,237,.45); background: var(--cyan-soft); }
-.batch-item.translating > span { background: var(--cyan); color: white; }
+.batch-item.translating, .batch-item.playing { border-color: rgba(31,168,237,.45); background: var(--cyan-soft); }
+.batch-item.translating > span, .batch-item.playing > span { background: var(--cyan); color: white; }
+.batch-item.ready { border-color: rgba(30,170,108,.4); background: #f0fbf6; }
+.batch-item.ready > span { background: #1eaa6c; color: white; }
 .queue-empty { min-height: 72px; border: 1px dashed #d9e0e8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #98a3b2; text-align: center; }
 .queue-empty > span { color: var(--cyan); font-size: 17px; }.queue-empty p { margin: 5px 12px 0; font-size: 9px; line-height: 1.4; }
 .backend-state { display: flex; align-items: center; gap: 5px; width: fit-content; margin-top: 7px; color: #8d98a8; font-size: 8px; }

@@ -40,7 +40,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
   assert.match(liveRoom, /getUserMedia\(\{ audio: true \}\)/);
-  assert.match(liveRoom, /wordBufferRef\.current\.length >= 12/);
+  assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 650/);
+  assert.match(liveRoom, /LIVE_AGENT_CONCURRENCY = 2/);
   assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);
   assert.match(liveRoom, /\/rooms\/\$\{roomId\}\/batches/);
   assert.match(liveRoom, /\/agent\/translate/);
@@ -56,5 +57,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/quality-runs"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/dataset\/sync"/);
   assert.match(services, /OPENAI_BASE_URL.*api\.openai\.com\/v1/);
+  assert.match(services, /prompt_cache_key/);
+  assert.match(services, /AGENT_CONTEXT_CACHE_TTL_SECONDS/);
   assert.match(services, /NEOTALK_VIDEO_SUBMIT_PATH/);
 });

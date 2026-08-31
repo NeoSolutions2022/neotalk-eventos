@@ -60,10 +60,16 @@ class ParseAgentPayloadTests(unittest.TestCase):
 
 
 class FakePool:
+    def __init__(self) -> None:
+        self.fetchrow_calls = 0
+        self.fetch_calls = 0
+
     async def fetchrow(self, _query: str) -> dict:
+        self.fetchrow_calls += 1
         return {"id": "prompt-id", "version": 1, "instructions": "Traduza para glosas válidas."}
 
     async def fetch(self, _query: str) -> list[dict]:
+        self.fetch_calls += 1
         return [{"word": "CASA"}]
 
 
@@ -94,6 +100,9 @@ class FakeAsyncClient:
 
 
 class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        services.invalidate_agent_context_cache()
+
     async def test_retries_incomplete_response_with_larger_budget(self) -> None:
         incomplete = FakeResponse(response_payload("{", status="incomplete", reason="max_output_tokens"))
         completed = FakeResponse(
@@ -108,6 +117,7 @@ class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
             patch.object(services, "OPENAI_API_KEY", "test-key"),
             patch.object(services, "OPENAI_MAX_OUTPUT_TOKENS", 2500),
             patch.object(services, "OPENAI_RETRY_MAX_OUTPUT_TOKENS", 5000),
+            patch.object(services, "OPENAI_REASONING_EFFORT", "minimal"),
             patch.object(services.httpx, "AsyncClient", return_value=client),
         ):
             result = await services.translate_to_glosses(FakePool(), "Minha casa")
@@ -115,6 +125,31 @@ class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["gloss_text"], "CASA")
         self.assertEqual(result["openai_response_id"], "resp-ok")
         self.assertEqual([request["max_output_tokens"] for request in client.requests], [2500, 5000])
+        self.assertTrue(client.requests[0]["prompt_cache_key"].startswith("neotalk-gloss-"))
+        self.assertEqual(client.requests[0]["reasoning"], {"effort": "minimal"})
+
+    async def test_reuses_prompt_and_catalog_context_between_live_translations(self) -> None:
+        completed = lambda response_id: FakeResponse(
+            {
+                "id": response_id,
+                **response_payload('{"glosses":["CASA"],"reasoning_summary":"Tradução direta."}'),
+            }
+        )
+        client = FakeAsyncClient([completed("resp-1"), completed("resp-2")])
+        pool = FakePool()
+
+        with (
+            patch.object(services, "OPENAI_API_KEY", "test-key"),
+            patch.object(services.httpx, "AsyncClient", return_value=client),
+        ):
+            first = await services.translate_to_glosses(pool, "Minha casa")
+            second = await services.translate_to_glosses(pool, "Sua casa")
+
+        self.assertFalse(first["context_cache_hit"])
+        self.assertTrue(second["context_cache_hit"])
+        self.assertEqual(pool.fetchrow_calls, 1)
+        self.assertEqual(pool.fetch_calls, 1)
+        self.assertEqual(client.requests[0]["prompt_cache_key"], client.requests[1]["prompt_cache_key"])
 
 
 if __name__ == "__main__":

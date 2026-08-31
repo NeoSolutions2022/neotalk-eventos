@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 
 type AvatarId = "lia" | "asuna" | "elia";
-type LiveBatch = { id: number; text: string; glossText?: string; status: "queued" | "translating" | "done" | "error" };
+type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
+type LiveBatch = { id: number; text: string; glossText?: string; status: RemoteBatchStatus | "ready" | "playing" };
 type SpeechResultEvent = { resultIndex: number; results: { length: number; [index: number]: { isFinal: boolean; 0: { transcript: string } } } };
 type SpeechErrorEvent = { error: string };
 type SpeechRecognitionLike = {
@@ -26,6 +27,10 @@ type AgentTranslation = { gloss_text: string; prompt_id: string; model: string; 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const liveRoomsApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
+const LIVE_BATCH_MIN_WORDS = 2;
+const LIVE_BATCH_MAX_WORDS = 12;
+const LIVE_BATCH_SILENCE_MS = 650;
+const LIVE_AGENT_CONCURRENCY = 2;
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${liveRoomsApiBase}${path}`, {
@@ -59,8 +64,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const roomIdRef = useRef<string | null>(null);
   const roomStartedAtRef = useRef<number | null>(null);
   const remoteBatchIdsRef = useRef(new Map<number, string>());
-  const desiredBatchStatusRef = useRef(new Map<number, LiveBatch["status"]>());
+  const desiredBatchStatusRef = useRef(new Map<number, RemoteBatchStatus>());
   const agentResultsRef = useRef(new Map<number, AgentTranslation>());
+  const agentPromisesRef = useRef(new Map<number, Promise<void>>());
 
   const [avatar, setAvatar] = useState<AvatarId>("lia");
   const [avatarReady, setAvatarReady] = useState(false);
@@ -82,7 +88,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   });
   const widgetOrigin = new URL(avatarWidgetBase).origin;
 
-  const updateRemoteBatch = async (localId: number, status: LiveBatch["status"], errorMessage?: string) => {
+  const updateRemoteBatch = async (localId: number, status: RemoteBatchStatus, errorMessage?: string) => {
     desiredBatchStatusRef.current.set(localId, status);
     const remoteId = remoteBatchIdsRef.current.get(localId);
     if (!remoteId) return;
@@ -133,44 +139,64 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     return true;
   };
 
-  const dispatchNextBatch = async () => {
+  const dispatchNextBatch = () => {
     if (!avatarReadyRef.current || avatarBusyRef.current || !pendingBatchesRef.current.length) return;
+    while (pendingBatchesRef.current[0]?.status === "error") pendingBatchesRef.current.shift();
+    const first = pendingBatchesRef.current[0];
+    if (!first || first.status !== "ready") return;
     const next = pendingBatchesRef.current.shift();
     if (!next) return;
-    next.status = "translating";
+    next.status = "playing";
     void updateRemoteBatch(next.id, "translating");
     activeBatchRef.current = next;
     avatarBusyRef.current = true;
     refreshBatchView();
     setAvatarError("");
-    setAvatarStatus("Agente convertendo para glosas");
-    try {
-      const agent = await roomApi<AgentTranslation>("/agent/translate", {
-        method: "POST",
-        body: JSON.stringify({ text: next.text, batch_id: remoteBatchIdsRef.current.get(next.id) || null }),
-      });
-      next.glossText = agent.gloss_text;
-      agentResultsRef.current.set(next.id, agent);
-      void updateRemoteBatch(next.id, "translating");
-      setAvatarStatus("Enviando glosas para a Lia");
-      if (sendToAvatar({ type: "neotalk:sign", phrase: agent.gloss_text })) return;
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
-      setAvatarError(message);
-      next.status = "error";
-      void updateRemoteBatch(next.id, "error", message);
-      activeBatchRef.current = null;
-      avatarBusyRef.current = false;
-      refreshBatchView();
-      window.setTimeout(() => void dispatchNextBatch(), 250);
-      return;
-    }
-    if (!avatarReadyRef.current) {
-      next.status = "queued";
+    setAvatarStatus("Enviando glosas para a Lia");
+    if (!sendToAvatar({ type: "neotalk:sign", phrase: next.glossText })) {
+      next.status = "ready";
       pendingBatchesRef.current.unshift(next);
       activeBatchRef.current = null;
       avatarBusyRef.current = false;
       refreshBatchView();
+    }
+  };
+
+  const translateBatch = (batch: LiveBatch) => {
+    if (batch.status !== "queued" || agentPromisesRef.current.has(batch.id)) return;
+    batch.status = "translating";
+    void updateRemoteBatch(batch.id, "translating");
+    refreshBatchView();
+    const request = roomApi<AgentTranslation>("/agent/translate", {
+      method: "POST",
+      body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null }),
+    }).then((agent) => {
+      batch.glossText = agent.gloss_text;
+      batch.status = "ready";
+      agentResultsRef.current.set(batch.id, agent);
+      void updateRemoteBatch(batch.id, "translating");
+    }).catch((reason) => {
+      const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
+      batch.status = "error";
+      setAvatarError(message);
+      void updateRemoteBatch(batch.id, "error", message);
+    }).finally(() => {
+      agentPromisesRef.current.delete(batch.id);
+      refreshBatchView();
+      pretranslatePendingBatches();
+      dispatchNextBatch();
+    });
+    agentPromisesRef.current.set(batch.id, request);
+  };
+
+  const pretranslatePendingBatches = () => {
+    let available = LIVE_AGENT_CONCURRENCY - agentPromisesRef.current.size;
+    if (available <= 0) return;
+    for (const batch of pendingBatchesRef.current) {
+      if (batch.status !== "queued") continue;
+      translateBatch(batch);
+      available -= 1;
+      if (available <= 0) break;
     }
   };
 
@@ -183,7 +209,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     activeBatchRef.current = null;
     avatarBusyRef.current = false;
     refreshBatchView();
-    if (status === "done") window.setTimeout(() => void dispatchNextBatch(), 250);
+    if (status === "done") window.setTimeout(dispatchNextBatch, 100);
   };
 
   const enqueueBatch = (text: string) => {
@@ -194,23 +220,29 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     desiredBatchStatusRef.current.set(batch.id, "queued");
     void persistBatch(batch);
     refreshBatchView();
-    void dispatchNextBatch();
+    pretranslatePendingBatches();
+    dispatchNextBatch();
   };
 
   const flushWordBuffer = () => {
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     batchTimerRef.current = null;
-    if (!wordBufferRef.current.length) return;
-    enqueueBatch(wordBufferRef.current.splice(0).join(" "));
+    while (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
+      enqueueBatch(wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS).join(" "));
+    }
+    if (wordBufferRef.current.length >= LIVE_BATCH_MIN_WORDS) {
+      enqueueBatch(wordBufferRef.current.splice(0).join(" "));
+    }
   };
 
   const addTranscriptToBuffer = (text: string) => {
     wordBufferRef.current.push(...text.split(/\s+/).filter(Boolean));
-    while (wordBufferRef.current.length >= 12) {
-      enqueueBatch(wordBufferRef.current.splice(0, 12).join(" "));
+    while (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
+      enqueueBatch(wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS).join(" "));
     }
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
-    batchTimerRef.current = window.setTimeout(flushWordBuffer, 1400);
+    const delay = /[.!?;:]$/.test(text.trim()) ? 180 : LIVE_BATCH_SILENCE_MS;
+    batchTimerRef.current = window.setTimeout(flushWordBuffer, delay);
   };
 
   useEffect(() => {
@@ -232,7 +264,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         setAvatarReady(true);
         setAvatarError("");
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
-        window.setTimeout(() => void dispatchNextBatch(), 200);
+        window.setTimeout(dispatchNextBatch, 100);
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(statusLabels[data.status] || data.status);
       } else if (data.type === "neotalk:playing") {
@@ -265,6 +297,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     recognitionRef.current = null;
     setInterimCaption("");
     flushWordBuffer();
+    wordBufferRef.current.splice(0);
     setRecording(false);
     const roomId = roomIdRef.current;
     const startedAt = roomStartedAtRef.current;
@@ -411,7 +444,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       <aside className="studio-panel">
         <div className="panel-tabs"><button className="active">Sala</button><button>Legenda</button></div>
         <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option><option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
-        <div className="config-block live-queue"><div className="block-title"><b>Fila de tradução</b><small>Lotes de até 12 palavras · agente GPT · {processedBatches} concluídos</small><span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span></div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "translating" ? "LIA" : "FILA"}</span><p>{batch.text}{batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
+        <div className="config-block live-queue"><div className="block-title"><b>Fila de tradução</b><small>Frases contínuas · agente antecipado · {processedBatches} concluídos</small><span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span></div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "playing" ? "LIA" : batch.status === "translating" ? "GPT" : batch.status === "ready" ? "PRONTO" : "FILA"}</span><p>{batch.text}{batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
         <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
         <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Abra o avatar em uma saída separada.</small></div><button className="output-button" onClick={() => { window.open(widgetUrl, "_blank", "noopener,noreferrer"); showToast("Player aberto em nova janela"); }}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div>
       </aside>

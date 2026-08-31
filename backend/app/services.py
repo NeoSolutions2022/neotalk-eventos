@@ -1,6 +1,9 @@
+import asyncio
+import hashlib
 import json
 import os
 import time
+from dataclasses import dataclass
 
 import asyncpg
 import httpx
@@ -32,6 +35,22 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstr
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2500"))
 OPENAI_RETRY_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_RETRY_MAX_OUTPUT_TOKENS", "5000"))
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "minimal").strip().lower()
+AGENT_CONTEXT_CACHE_TTL_SECONDS = max(1.0, float(os.getenv("AGENT_CONTEXT_CACHE_TTL_SECONDS", "300")))
+
+
+@dataclass(frozen=True)
+class AgentContext:
+    prompt: dict
+    catalog: tuple[str, ...]
+    allowed: frozenset[str]
+    instructions: str
+    prompt_cache_key: str
+    expires_at: float
+
+
+_agent_context_cache: AgentContext | None = None
+_agent_context_lock = asyncio.Lock()
 
 
 class AgentResponseIncomplete(Exception):
@@ -45,6 +64,7 @@ def integration_status() -> dict:
         "neotalk_configured": bool(NEOTALK_API_KEY and NEOTALK_API_BASE_URL),
         "openai_configured": bool(OPENAI_API_KEY),
         "openai_model": OPENAI_MODEL,
+        "agent_context_cache_ttl_seconds": AGENT_CONTEXT_CACHE_TTL_SECONDS,
         "video_submit_path": NEOTALK_VIDEO_SUBMIT_PATH,
     }
 
@@ -85,7 +105,54 @@ async def sync_pose_words(pool: asyncpg.Pool) -> dict:
                 "INSERT INTO pose_words (word, snapshot_id) VALUES ($1, $2)",
                 [(word, snapshot_id) for word in unique_words],
             )
+    invalidate_agent_context_cache()
     return {"snapshot_id": snapshot_id, "word_count": len(unique_words), "pages": page}
+
+
+def invalidate_agent_context_cache() -> None:
+    global _agent_context_cache
+    _agent_context_cache = None
+
+
+async def _get_agent_context(pool: asyncpg.Pool) -> tuple[AgentContext, bool]:
+    global _agent_context_cache
+    now = time.monotonic()
+    if _agent_context_cache and _agent_context_cache.expires_at > now:
+        return _agent_context_cache, True
+
+    async with _agent_context_lock:
+        now = time.monotonic()
+        if _agent_context_cache and _agent_context_cache.expires_at > now:
+            return _agent_context_cache, True
+
+        prompt_record = await pool.fetchrow("SELECT * FROM agent_prompts WHERE is_active = TRUE LIMIT 1")
+        if not prompt_record:
+            raise HTTPException(status_code=409, detail="Não existe prompt ativo para o agente.")
+        rows = await pool.fetch("SELECT word FROM pose_words ORDER BY word LIMIT 8000")
+        catalog = tuple(row["word"] for row in rows)
+        if not catalog:
+            raise HTTPException(status_code=409, detail="O catálogo está vazio. Sincronize o dataset antes de traduzir.")
+
+        prompt = dict(prompt_record)
+        instructions = (
+            f"{prompt['instructions']}\n\nCATÁLOGO AUTORIZADO ({len(catalog)} palavras):\n"
+            + " | ".join(catalog)
+            + "\n\nPara entradas ao vivo, traduza o trecho como uma unidade de sentido e forme uma sequência contínua de glosas. "
+            + "Quando o catálogo permitir, use duas ou mais glosas e evite devolver uma palavra isolada. "
+            + "Responda somente no formato solicitado e mantenha reasoning_summary curto, com no máximo duas frases."
+        )
+        fingerprint = hashlib.sha256(
+            f"{prompt['id']}:{prompt['version']}:{instructions}".encode("utf-8")
+        ).hexdigest()[:32]
+        _agent_context_cache = AgentContext(
+            prompt=prompt,
+            catalog=catalog,
+            allowed=frozenset(catalog),
+            instructions=instructions,
+            prompt_cache_key=f"neotalk-gloss-{fingerprint}",
+            expires_at=now + AGENT_CONTEXT_CACHE_TTL_SECONDS,
+        )
+        return _agent_context_cache, False
 
 
 def _output_text(payload: dict) -> str:
@@ -125,23 +192,13 @@ def _openai_error_message(response: httpx.Response) -> str:
 async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY não configurada no backend.")
-    prompt = await pool.fetchrow("SELECT * FROM agent_prompts WHERE is_active = TRUE LIMIT 1")
-    if not prompt:
-        raise HTTPException(status_code=409, detail="Não existe prompt ativo para o agente.")
-    rows = await pool.fetch("SELECT word FROM pose_words ORDER BY word LIMIT 8000")
-    catalog = [row["word"] for row in rows]
-    if not catalog:
-        raise HTTPException(status_code=409, detail="O catálogo está vazio. Sincronize o dataset antes de traduzir.")
-    instructions = (
-        f"{prompt['instructions']}\n\nCATÁLOGO AUTORIZADO ({len(catalog)} palavras):\n"
-        + " | ".join(catalog)
-        + "\n\nResponda somente no formato solicitado e mantenha reasoning_summary curto, com no máximo duas frases."
-    )
+    context, context_cache_hit = await _get_agent_context(pool)
     body = {
         "model": OPENAI_MODEL,
-        "instructions": instructions,
+        "instructions": context.instructions,
         "input": text,
         "store": False,
+        "prompt_cache_key": context.prompt_cache_key,
         "text": {
             "verbosity": "low",
             "format": {
@@ -160,6 +217,8 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
             }
         },
     }
+    if OPENAI_REASONING_EFFORT:
+        body["reasoning"] = {"effort": OPENAI_REASONING_EFFORT}
     started = time.perf_counter()
     response_payload: dict | None = None
     result: dict | None = None
@@ -194,10 +253,9 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
     latency_ms = round((time.perf_counter() - started) * 1000)
     if response_payload is None or result is None:
         raise HTTPException(status_code=502, detail="O agente não concluiu a tradução.")
-    allowed = set(catalog)
     requested = [str(word).strip().upper() for word in result.get("glosses", []) if str(word).strip()]
-    glosses = [word for word in requested if word in allowed]
-    missing_words = [word for word in requested if word not in allowed]
+    glosses = [word for word in requested if word in context.allowed]
+    missing_words = [word for word in requested if word not in context.allowed]
     if not glosses:
         raise HTTPException(status_code=422, detail="O agente não encontrou glosas válidas no catálogo.")
     return {
@@ -206,11 +264,13 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
         "gloss_text": " ".join(glosses),
         "missing_words": missing_words,
         "reasoning_summary": result.get("reasoning_summary", ""),
-        "prompt_id": prompt["id"],
-        "prompt_version": prompt["version"],
+        "prompt_id": context.prompt["id"],
+        "prompt_version": context.prompt["version"],
         "model": OPENAI_MODEL,
         "openai_response_id": response_payload.get("id"),
         "agent_latency_ms": latency_ms,
+        "context_cache_hit": context_cache_hit,
+        "cached_input_tokens": ((response_payload.get("usage") or {}).get("input_tokens_details") or {}).get("cached_tokens", 0),
     }
 
 
