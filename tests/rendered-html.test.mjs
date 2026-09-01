@@ -66,6 +66,9 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /option value="elia">Elia · NeoTalk/);
   assert.match(quality, /\/admin\/quality-runs/);
   assert.match(quality, /neotalk:sign/);
+  assert.match(quality, /neotalk:set-avatar/);
+  assert.match(quality, /option value="asuna">Asuna/);
+  assert.match(quality, /option value="elia">Elia/);
   assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);

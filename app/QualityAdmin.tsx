@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Prompt = { id: string; name: string; instructions: string; version: number; is_active: boolean; created_at: string };
+type AvatarId = "lia" | "asuna" | "elia";
 type Integrations = { neotalk_configured: boolean; openai_configured: boolean; openai_model: string; dataset_words: number; active_prompt?: { id: string; name: string; version: number } };
 type QualityRun = {
   id: string;
@@ -23,6 +24,7 @@ type QualityRun = {
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 const widgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
+const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
@@ -38,6 +40,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 export default function QualityAdmin({ showToast }: { showToast: (message: string) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const latestGlossRef = useRef("");
   const [integrations, setIntegrations] = useState<Integrations | null>(null);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [instructions, setInstructions] = useState("");
@@ -49,10 +52,15 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [avatarReady, setAvatarReady] = useState(false);
+  const [avatar, setAvatar] = useState<AvatarId>("lia");
   const [avatarStatus, setAvatarStatus] = useState("Carregando avatar");
   const [rating, setRating] = useState(0);
   const widgetUrl = `${widgetBase}?avatar=lia&loop=0&background=%2310233f`;
   const widgetOrigin = new URL(widgetBase).origin;
+
+  useEffect(() => {
+    latestGlossRef.current = run?.gloss_text || "";
+  }, [run?.gloss_text]);
 
   const loadAdmin = useCallback(async () => {
     const [integrationData, promptData, wordData] = await Promise.all([
@@ -80,18 +88,30 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       const data = event.data as { type?: string; status?: string; message?: string };
       if (data.type === "neotalk:ready") {
         setAvatarReady(true);
-        setAvatarStatus("Lia pronta");
+        setAvatarStatus(`${avatarNames[avatar]} pronta`);
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(data.status);
       } else if (data.type === "neotalk:playing") {
-        setAvatarStatus("Lia sinalizando");
+        setAvatarStatus(`${avatarNames[avatar]} sinalizando`);
       } else if (data.type === "neotalk:error") {
         setAvatarStatus(data.message || "Erro no avatar");
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [widgetOrigin]);
+  }, [avatar, widgetOrigin]);
+
+  useEffect(() => {
+    if (!avatarReady || !frameRef.current?.contentWindow) return;
+    const frameWindow = frameRef.current.contentWindow;
+    frameWindow.postMessage({ type: "neotalk:set-avatar", avatar }, widgetOrigin);
+    setAvatarStatus(`Trocando para ${avatarNames[avatar]}`);
+    const timer = window.setTimeout(() => {
+      if (latestGlossRef.current) frameWindow.postMessage({ type: "neotalk:sign", phrase: latestGlossRef.current }, widgetOrigin);
+      else setAvatarStatus(`${avatarNames[avatar]} pronta`);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [avatar, avatarReady, widgetOrigin]);
 
   useEffect(() => {
     if (!run?.gloss_text || !avatarReady) return;
@@ -177,7 +197,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
 
   return <>
     <div className="page-heading quality-heading">
-      <div><p className="eyebrow">QUALIDADE DE TRADUÇÃO</p><h1>Laboratório do agente</h1><p>Compare o vídeo de referência e a Lia usando exatamente as mesmas glosas.</p></div>
+      <div><p className="eyebrow">QUALIDADE DE TRADUÇÃO</p><h1>Laboratório do agente</h1><p>Compare o vídeo de referência e os avatares usando exatamente as mesmas glosas.</p></div>
       <div className="integration-pills">
         <span className={integrations?.openai_configured ? "ok" : "warn"}>GPT {integrations?.openai_configured ? integrations.openai_model : "sem chave"}</span>
         <span className={integrations?.neotalk_configured ? "ok" : "warn"}>API NeoTalk</span>
@@ -194,7 +214,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       <div className="quality-main">
         <div className="compare-grid">
           <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Pronto" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
-          <article className="quality-player"><div className="quality-player-title"><div><span>AVATAR</span><b>Lia · widget oficial</b></div><small>{avatarStatus}</small></div><div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title="Lia para comparação de qualidade" allow="fullscreen" /></div></article>
+          <article className="quality-player"><div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div><div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div></article>
         </div>
         <div className="quality-rating"><div><b>Fidelidade geral</b><small>Avalie a comparação desta execução.</small></div><div>{[1,2,3,4,5].map((score) => <button key={score} className={rating >= score ? "selected" : ""} onClick={() => void rate(score)} disabled={!run}>★</button>)}</div></div>
       </div>
