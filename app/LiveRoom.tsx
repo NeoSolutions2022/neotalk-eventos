@@ -50,6 +50,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   showToast: (value: string) => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const listeningRef = useRef(false);
   const restartTimerRef = useRef<number | null>(null);
@@ -431,9 +432,10 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     </div>
     <div className="studio-grid">
       <section className="stage-card">
-        <div className="stage-toolbar"><div><span className={recording ? "tag live-tag" : "tag"}>{recording ? "AO VIVO" : "PRÉVIA"}</span><b>Sala · {roomName || "Sem nome"}</b><span className={`avatar-health ${avatarReady ? "connected" : ""}`}><i />{avatarStatus}</span></div><button aria-label="Exibir player em tela cheia" onClick={() => frameRef.current?.requestFullscreen()}>⛶</button></div>
-        <div className={`live-stage ${playerMode}`}>
+        <div className="stage-toolbar"><div><span className={recording ? "tag live-tag" : "tag"}>{recording ? "AO VIVO" : "PRÉVIA"}</span><b>Sala · {roomName || "Sem nome"}</b><span className={`avatar-health ${avatarReady ? "connected" : ""}`}><i />{avatarStatus}</span></div><button aria-label="Exibir player e legendas em tela cheia" onClick={() => stageRef.current?.requestFullscreen()}>⛶</button></div>
+        <div ref={stageRef} className={`live-stage ${playerMode}`}>
           <iframe ref={frameRef} className="avatar-widget-frame" title="Avatar 3D NeoTalk" src={widgetUrl} allow="fullscreen" />
+          <button className="exit-fullscreen" aria-label="Sair da tela cheia" onClick={() => void document.exitFullscreen()}>×</button>
           <div className="stage-brand">neo<strong>talk</strong></div>
           <div className="live-captions" aria-live="polite">{recording ? (interimCaption || lastCaption || "Ouvindo…") : "Inicie a sala para capturar o microfone e gerar legendas."}</div>
           <span className="stage-language">PT → LIBRAS</span>

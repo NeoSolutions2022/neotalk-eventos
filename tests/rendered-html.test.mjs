@@ -40,6 +40,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
   assert.match(liveRoom, /getUserMedia\(\{ audio: true \}\)/);
+  assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
+  assert.match(liveRoom, /className="live-captions"/);
   assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 650/);
   assert.match(liveRoom, /LIVE_AGENT_CONCURRENCY = 2/);
   assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);
