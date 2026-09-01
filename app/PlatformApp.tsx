@@ -12,11 +12,11 @@ const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://i
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
 const nav = [
-  { id: "dashboard" as View, icon: "⌂", label: "Visão geral", href: "/dashboard" },
-  { id: "instances" as View, icon: "◉", label: "Salas ao vivo", href: "/salas" },
-  { id: "packages" as View, icon: "◷", label: "Pacotes e uso", href: "/uso" },
-  { id: "billing" as View, icon: "▣", label: "Pagamento", href: "/pagamento" },
-  { id: "quality" as View, icon: "◇", label: "Qualidade", href: "/qualidade" },
+  { id: "dashboard" as View, icon: "home" as IconName, label: "Visão geral", href: "/dashboard" },
+  { id: "instances" as View, icon: "broadcast" as IconName, label: "Salas ao vivo", href: "/salas" },
+  { id: "packages" as View, icon: "clock" as IconName, label: "Pacotes e uso", href: "/uso" },
+  { id: "billing" as View, icon: "card" as IconName, label: "Pagamento", href: "/pagamento" },
+  { id: "quality" as View, icon: "sparkles" as IconName, label: "Qualidade", href: "/qualidade" },
 ];
 
 const viewPaths: Record<View, string> = {
@@ -94,20 +94,20 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           <span className="nav-title">PLATAFORMA</span>
           {nav.map((item) => {
             const active = view === item.id || (view === "studio" && item.id === "instances");
-            return <a key={item.id} href={item.href} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => setSidebarOpen(false)}><span>{item.icon}</span>{item.label}</a>;
+            return <a key={item.id} href={item.href} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => setSidebarOpen(false)}><span><Icon name={item.icon} /></span>{item.label}</a>;
           })}
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><span className="help-icon">?</span><strong>Precisa de ajuda?</strong><small>Fale com nosso time</small><button onClick={() => showToast("Atendimento solicitado")}>Abrir atendimento</button></div>
-          <a className="logout" href="/login"><span>↗</span> Sair</a>
+          <a className="logout" href="/login"><span><Icon name="logout" /></span> Sair</a>
         </div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <button className="mobile-menu" aria-label="Abrir menu principal" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}>☰</button>
+          <button className="mobile-menu" aria-label="Abrir menu principal" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button>
           <div className="breadcrumbs"><span>NeoTalk</span><b>/</b>{view === "studio" ? "Estúdio ao vivo" : nav.find((item) => item.id === view)?.label}</div>
-          <div className="top-actions"><a className="top-create" href="/salas/ao-vivo">＋ Nova sala</a><button className="icon-button" aria-label="Notificações">♢<i>2</i></button><div className="profile"><div className="avatar-initials">MA</div><div><strong>Marina Almeida</strong><small>Empresa Aurora</small></div><span>⌄</span></div></div>
+          <div className="top-actions"><a className="top-create" href="/salas/ao-vivo"><Icon name="plus" /> Nova sala</a><button className="icon-button" aria-label="Notificações"><Icon name="bell" /><i>2</i></button><div className="profile"><div className="avatar-initials">MA</div><div><strong>Marina Almeida</strong><small>Empresa Aurora</small></div><span><Icon name="chevron" /></span></div></div>
         </header>
         <div className="content">
           {view === "dashboard" && <Dashboard onCreate={() => goTo("studio")} onViewAll={() => goTo("instances")} />}
@@ -127,9 +127,27 @@ function Logo({ dark = false }: { dark?: boolean }) {
   return <div className={`logo ${dark ? "dark" : ""}`}><img src="/neotalk-logo.png" alt="NeoTalk" /><small>EVENTOS</small></div>;
 }
 
+type IconName = "home" | "broadcast" | "clock" | "card" | "sparkles" | "logout" | "menu" | "plus" | "bell" | "chevron";
+
+function Icon({ name }: { name: IconName }) {
+  const paths: Record<IconName, React.ReactNode> = {
+    home: <><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></>,
+    broadcast: <><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M5.6 5.6a9 9 0 0 0 0 12.8"/><path d="M18.4 5.6a9 9 0 0 1 0 12.8"/></>,
+    clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+    card: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></>,
+    sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3Z"/><path d="m18.5 14 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z"/><path d="m5 13 .8 2.2L8 16l-2.2.8L5 19l-.8-2.2L2 16l2.2-.8L5 13Z"/></>,
+    logout: <><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4"/><path d="M8 12h10"/></>,
+    menu: <><path d="M4 7h16M4 12h16M4 17h16"/></>,
+    plus: <><path d="M12 5v14M5 12h14"/></>,
+    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
+    chevron: <path d="m8 10 4 4 4-4"/>,
+  };
+  return <svg className="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
+}
+
 function Dashboard({ onCreate, onViewAll }: { onCreate: () => void; onViewAll: () => void }) {
   return <>
-    <div className="page-heading"><div><p className="eyebrow">VISÃO GERAL DA CONTA</p><h1>Olá, Marina <span>👋</span></h1><p>Veja como está o uso da sua conta e continue traduzindo.</p></div><button className="primary" onClick={onCreate}><span>＋</span> Criar sala ao vivo</button></div>
+    <div className="page-heading"><div><p className="eyebrow">VISÃO GERAL DA CONTA</p><h1>Olá, Marina</h1><p>Veja como está o uso da sua conta e continue traduzindo.</p></div><button className="primary" onClick={onCreate}><span>＋</span> Criar sala ao vivo</button></div>
     <section className="summary-grid">
       <article className="balance-card"><div className="card-top"><span className="card-icon lime">◷</span><span className="pill good">Saldo disponível</span></div><div><strong>12h <small>35min</small></strong><p>de 20 horas contratadas</p></div><div className="progress"><i style={{ width: "63%" }} /></div><div className="progress-label"><span>63% disponível</span><span>7h 25min utilizadas</span></div></article>
       <article className="stat-card"><span className="card-icon sky">◉</span><div><p>Traduções realizadas</p><strong>18</strong><small><b>↗ 12%</b> nos últimos 30 dias</small></div></article>
