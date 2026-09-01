@@ -38,13 +38,14 @@ test("serves every primary product route directly", async () => {
 });
 
 test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
-  const [liveRoom, quality, rooms, compose, api, services] = await Promise.all([
+  const [liveRoom, quality, rooms, compose, api, services, avatarMessages] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/QualityAdmin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/Rooms.tsx", import.meta.url), "utf8"),
     readFile(new URL("../compose.yaml", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/main.py", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/services.py", import.meta.url), "utf8"),
+    readFile(new URL("../app/avatarMessages.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
@@ -72,6 +73,9 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(quality, /avatarLoopTimerRef/);
   assert.match(quality, /sinalizando em loop/);
   assert.match(quality, /controls autoPlay loop/);
+  assert.match(liveRoom, /isNonBlockingAvatarError/);
+  assert.match(quality, /isNonBlockingAvatarError/);
+  assert.match(avatarMessages, /não confirmou \(\?:o \)\?carregamento da pose/);
   assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);

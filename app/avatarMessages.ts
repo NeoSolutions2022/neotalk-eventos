@@ -1,0 +1,10 @@
+const NON_BLOCKING_AVATAR_PATTERNS = [
+  /não confirmou (?:o )?carregamento da pose/i,
+  /confirmação (?:do carregamento )?da pose expirou/i,
+  /pose (?:load|loading) confirmation timeout/i,
+];
+
+export function isNonBlockingAvatarError(message?: string) {
+  if (!message) return false;
+  return NON_BLOCKING_AVATAR_PATTERNS.some((pattern) => pattern.test(message));
+}

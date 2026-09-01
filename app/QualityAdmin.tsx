@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isNonBlockingAvatarError } from "./avatarMessages";
 
 type Prompt = { id: string; name: string; instructions: string; version: number; is_active: boolean; created_at: string };
 type AvatarId = "lia" | "asuna" | "elia";
@@ -107,6 +108,10 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
           frameRef.current.contentWindow.postMessage({ type: "neotalk:sign", phrase: gloss }, widgetOrigin);
         }, Math.max(2800, wordCount * 850));
       } else if (data.type === "neotalk:error") {
+        if (isNonBlockingAvatarError(data.message)) {
+          setAvatarStatus(`${avatarNames[avatar]} sinalizando em loop`);
+          return;
+        }
         clearAvatarLoop();
         setAvatarStatus(data.message || "Erro no avatar");
       }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { isNonBlockingAvatarError } from "./avatarMessages";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -348,6 +349,11 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
           Math.max(2600, wordCount * 850),
         );
       } else if (data.type === "neotalk:error") {
+        if (isNonBlockingAvatarError(data.message)) {
+          setAvatarError("");
+          setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
+          return;
+        }
         avatarReadyRef.current = false;
         setAvatarReady(false);
         setAvatarError(data.message || "Não foi possível traduzir o lote atual.");

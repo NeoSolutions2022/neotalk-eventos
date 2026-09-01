@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
+import { isNonBlockingAvatarError } from "./avatarMessages";
 
 export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "login" | "register";
 type AvatarId = "lia" | "asuna" | "elia";
@@ -218,6 +219,11 @@ function Studio({ recording, setRecording, time, playerMode, setPlayerMode, show
       } else if (data.type === "neotalk:playing") {
         setAvatarStatus("Avatar sinalizando");
       } else if (data.type === "neotalk:error") {
+        if (isNonBlockingAvatarError(data.message)) {
+          setAvatarError("");
+          setAvatarStatus("Avatar sinalizando");
+          return;
+        }
         setAvatarError(data.message || "Não foi possível executar a tradução no avatar.");
         setAvatarStatus("Avatar indisponível");
       }
