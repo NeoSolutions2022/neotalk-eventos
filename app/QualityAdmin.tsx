@@ -41,6 +41,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 export default function QualityAdmin({ showToast }: { showToast: (message: string) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const latestGlossRef = useRef("");
+  const avatarLoopTimerRef = useRef<number | null>(null);
   const [integrations, setIntegrations] = useState<Integrations | null>(null);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [instructions, setInstructions] = useState("");
@@ -61,6 +62,11 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   useEffect(() => {
     latestGlossRef.current = run?.gloss_text || "";
   }, [run?.gloss_text]);
+
+  const clearAvatarLoop = () => {
+    if (avatarLoopTimerRef.current) window.clearTimeout(avatarLoopTimerRef.current);
+    avatarLoopTimerRef.current = null;
+  };
 
   const loadAdmin = useCallback(async () => {
     const [integrationData, promptData, wordData] = await Promise.all([
@@ -85,15 +91,23 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== widgetOrigin || event.source !== frameRef.current?.contentWindow) return;
-      const data = event.data as { type?: string; status?: string; message?: string };
+      const data = event.data as { type?: string; status?: string; message?: string; words?: unknown[] };
       if (data.type === "neotalk:ready") {
         setAvatarReady(true);
         setAvatarStatus(`${avatarNames[avatar]} pronta`);
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(data.status);
       } else if (data.type === "neotalk:playing") {
-        setAvatarStatus(`${avatarNames[avatar]} sinalizando`);
+        setAvatarStatus(`${avatarNames[avatar]} sinalizando em loop`);
+        clearAvatarLoop();
+        const wordCount = Array.isArray(data.words) ? data.words.length : latestGlossRef.current.split(/\s+/).filter(Boolean).length;
+        avatarLoopTimerRef.current = window.setTimeout(() => {
+          const gloss = latestGlossRef.current;
+          if (!gloss || !frameRef.current?.contentWindow) return;
+          frameRef.current.contentWindow.postMessage({ type: "neotalk:sign", phrase: gloss }, widgetOrigin);
+        }, Math.max(2800, wordCount * 850));
       } else if (data.type === "neotalk:error") {
+        clearAvatarLoop();
         setAvatarStatus(data.message || "Erro no avatar");
       }
     };
@@ -103,6 +117,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
 
   useEffect(() => {
     if (!avatarReady || !frameRef.current?.contentWindow) return;
+    clearAvatarLoop();
     const frameWindow = frameRef.current.contentWindow;
     frameWindow.postMessage({ type: "neotalk:set-avatar", avatar }, widgetOrigin);
     setAvatarStatus(`Trocando para ${avatarNames[avatar]}`);
@@ -112,6 +127,11 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     }, 700);
     return () => window.clearTimeout(timer);
   }, [avatar, avatarReady, widgetOrigin]);
+
+  useEffect(() => {
+    clearAvatarLoop();
+    return clearAvatarLoop;
+  }, [run?.id]);
 
   useEffect(() => {
     if (!run?.gloss_text || !avatarReady) return;
@@ -165,6 +185,8 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
 
   const executeTest = async () => {
     setRunning(true);
+    clearAvatarLoop();
+    latestGlossRef.current = "";
     setRun(null);
     setRating(0);
     setError("");
@@ -213,7 +235,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     <div className="quality-layout">
       <div className="quality-main">
         <div className="compare-grid">
-          <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Pronto" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
+          <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Reprodução em loop" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay loop><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
           <article className="quality-player"><div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div><div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div></article>
         </div>
         <div className="quality-rating"><div><b>Fidelidade geral</b><small>Avalie a comparação desta execução.</small></div><div>{[1,2,3,4,5].map((score) => <button key={score} className={rating >= score ? "selected" : ""} onClick={() => void rate(score)} disabled={!run}>★</button>)}</div></div>
