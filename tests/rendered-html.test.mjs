@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(path = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
@@ -28,6 +28,15 @@ test("server-renders the NeoTalk live rooms product", async () => {
   assert.doesNotMatch(html, /Your site is taking shape|Building your site/);
 });
 
+test("serves every primary product route directly", async () => {
+  const routes = ["/dashboard", "/salas", "/salas/ao-vivo", "/uso", "/pagamento", "/qualidade", "/login", "/cadastro"];
+  for (const route of routes) {
+    const response = await render(route);
+    assert.equal(response.status, 200, route);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i, route);
+  }
+});
+
 test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
   const [liveRoom, quality, rooms, compose, api, services] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
@@ -42,6 +51,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /getUserMedia\(\{ audio: true \}\)/);
   assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
   assert.match(liveRoom, /className="live-captions"/);
+  assert.match(liveRoom, /window\.location\.href = "\/salas"/);
   assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 650/);
   assert.match(liveRoom, /LIVE_AGENT_CONCURRENCY = 2/);
   assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);

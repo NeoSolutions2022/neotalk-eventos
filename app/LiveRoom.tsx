@@ -427,7 +427,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
   return <>
     <div className="studio-heading">
-      <div><button className="back">←</button><div><p className="eyebrow">TRADUÇÃO EM TEMPO REAL</p><h1>Sala ao vivo</h1></div></div>
+      <div><button className="back" aria-label="Voltar para salas" onClick={() => { window.location.href = "/salas"; }}>←</button><div><p className="eyebrow">TRADUÇÃO EM TEMPO REAL</p><h1>Sala ao vivo</h1></div></div>
       <div className="studio-status"><span className={recording ? "pill live" : "pill"}><i className="status-dot" />{recording ? `AO VIVO · ${time}` : "SALA PRONTA"}</span><button className="secondary" onClick={() => showToast("Configuração da sala salva")}>Salvar sala</button></div>
     </div>
     <div className="studio-grid">
