@@ -54,6 +54,11 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /window\.location\.href = "\/salas"/);
   assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 650/);
   assert.match(liveRoom, /LIVE_AGENT_CONCURRENCY = 2/);
+  assert.match(liveRoom, /LIVE_IDLE_LOOP_DELAY_MS = 2200/);
+  assert.match(liveRoom, /recentPhrasesRef\.current.*slice\(-2\)/);
+  assert.match(liveRoom, /interruptIdleLoopForSpeech/);
+  assert.match(liveRoom, /recognitionWatchdogRef/);
+  assert.match(liveRoom, /recognition\.abort\(\)/);
   assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);
   assert.match(liveRoom, /\/rooms\/\$\{roomId\}\/batches/);
   assert.match(liveRoom, /\/agent\/translate/);
