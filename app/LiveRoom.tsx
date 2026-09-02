@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { isNonBlockingAvatarError } from "./avatarMessages";
+import type { CSSProperties } from "react";
+import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessages";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -34,14 +35,34 @@ const LIVE_BATCH_SILENCE_MS = 650;
 const LIVE_AGENT_CONCURRENCY = 2;
 const LIVE_IDLE_LOOP_DELAY_MS = 2200;
 const LIVE_IDLE_LOOP_GAP_MS = 320;
+const LIVE_API_RETRY_DELAYS_MS = [350, 800];
+const LIVE_AVATAR_RETRY_DELAY_MS = 900;
+const LIVE_AVATAR_MAX_RETRIES = 2;
+
+class RoomApiError extends Error {
+  constructor(public status: number) {
+    super(`Falha da API (${status})`);
+  }
+}
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${liveRoomsApiBase}${path}`, {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
-  if (!response.ok) throw new Error(`Falha da API (${response.status})`);
+  if (!response.ok) throw new RoomApiError(response.status);
   return response.json() as Promise<T>;
+}
+
+async function retryUnprocessable<T>(request: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await request();
+    } catch (reason) {
+      if (!(reason instanceof RoomApiError) || reason.status !== 422 || attempt >= LIVE_API_RETRY_DELAYS_MS.length) throw reason;
+      await new Promise((resolve) => window.setTimeout(resolve, LIVE_API_RETRY_DELAYS_MS[attempt]));
+    }
+  }
 }
 
 export default function LiveRoom({ recording, setRecording, time, playerMode, setPlayerMode, showToast }: {
@@ -55,13 +76,18 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const restartRecognitionRef = useRef<(delay?: number) => void>(() => undefined);
   const listeningRef = useRef(false);
+  const microphoneMutedRef = useRef(false);
   const restartTimerRef = useRef<number | null>(null);
   const recognitionWatchdogRef = useRef<number | null>(null);
   const recognitionActivityAtRef = useRef(0);
   const batchTimerRef = useRef<number | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const idleLoopTimerRef = useRef<number | null>(null);
+  const avatarRetryTimerRef = useRef<number | null>(null);
+  const avatarRetryCountRef = useRef(0);
+  const avatarPlaybackStartedRef = useRef(false);
   const wordBufferRef = useRef<string[]>([]);
   const pendingBatchesRef = useRef<LiveBatch[]>([]);
   const activeBatchRef = useRef<LiveBatch | null>(null);
@@ -86,6 +112,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const [interimCaption, setInterimCaption] = useState("");
   const [lastCaption, setLastCaption] = useState("");
   const [microphoneName, setMicrophoneName] = useState("Microfone padrão");
+  const [microphoneMuted, setMicrophoneMuted] = useState(false);
+  const [stageZoom, setStageZoom] = useState(1);
   const [batches, setBatches] = useState<LiveBatch[]>([]);
   const [processedBatches, setProcessedBatches] = useState(0);
   const [roomName, setRoomName] = useState("Evento institucional 2026");
@@ -155,8 +183,14 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     idleLoopTimerRef.current = null;
   };
 
+  const clearAvatarRetryTimer = () => {
+    if (avatarRetryTimerRef.current) window.clearTimeout(avatarRetryTimerRef.current);
+    avatarRetryTimerRef.current = null;
+  };
+
   const playIdleLoopPhrase = () => {
     clearIdleLoopTimer();
+    clearAvatarRetryTimer();
     if (!listeningRef.current || !avatarReadyRef.current || avatarBusyRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length) return;
     const recentPhrases = recentPhrasesRef.current;
     if (!recentPhrases.length) return;
@@ -165,6 +199,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     idleLoopIndexRef.current = (phraseIndex + 1) % recentPhrases.length;
     idleLoopActiveRef.current = true;
     avatarBusyRef.current = true;
+    avatarRetryCountRef.current = 0;
+    avatarPlaybackStartedRef.current = false;
     setAvatarError("");
     setAvatarStatus(`Loop de espera · frase ${phraseIndex + 1} de ${recentPhrases.length}`);
     if (!sendToAvatar({ type: "neotalk:sign", phrase: phrase.glossText || phrase.text })) {
@@ -191,6 +227,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const interruptIdleLoopForSpeech = () => {
     lastSpeechAtRef.current = Date.now();
     clearIdleLoopTimer();
+    clearAvatarRetryTimer();
+    avatarRetryCountRef.current = 0;
+    avatarPlaybackStartedRef.current = false;
     if (idleLoopActiveRef.current) {
       if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
@@ -205,6 +244,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const dispatchNextBatch = () => {
     if (!avatarReadyRef.current || avatarBusyRef.current || !pendingBatchesRef.current.length) return;
     clearIdleLoopTimer();
+    clearAvatarRetryTimer();
     while (pendingBatchesRef.current[0]?.status === "error") pendingBatchesRef.current.shift();
     const first = pendingBatchesRef.current[0];
     if (!first || first.status !== "ready") return;
@@ -214,6 +254,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     void updateRemoteBatch(next.id, "translating");
     activeBatchRef.current = next;
     avatarBusyRef.current = true;
+    avatarRetryCountRef.current = 0;
+    avatarPlaybackStartedRef.current = false;
     refreshBatchView();
     setAvatarError("");
     setAvatarStatus("Enviando glosas para a Lia");
@@ -231,10 +273,10 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     batch.status = "translating";
     void updateRemoteBatch(batch.id, "translating");
     refreshBatchView();
-    const request = roomApi<AgentTranslation>("/agent/translate", {
+    const request = retryUnprocessable(() => roomApi<AgentTranslation>("/agent/translate", {
       method: "POST",
       body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null }),
-    }).then((agent) => {
+    })).then((agent) => {
       batch.glossText = agent.gloss_text;
       batch.status = "ready";
       agentResultsRef.current.set(batch.id, agent);
@@ -242,7 +284,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }).catch((reason) => {
       const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
       batch.status = "error";
-      setAvatarError(message);
+      if (!(reason instanceof RoomApiError) || reason.status !== 422) setAvatarError(message);
       void updateRemoteBatch(batch.id, "error", message);
     }).finally(() => {
       agentPromisesRef.current.delete(batch.id);
@@ -284,6 +326,56 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
   };
 
+  const releaseAvatarAfterRetryFailure = () => {
+    clearAvatarRetryTimer();
+    avatarRetryCountRef.current = 0;
+    avatarPlaybackStartedRef.current = false;
+    if (idleLoopActiveRef.current) {
+      idleLoopActiveRef.current = false;
+      avatarBusyRef.current = false;
+      scheduleIdleLoop(LIVE_IDLE_LOOP_GAP_MS);
+      return;
+    }
+    const failedBatch = activeBatchRef.current;
+    if (failedBatch) {
+      failedBatch.status = "error";
+      void updateRemoteBatch(failedBatch.id, "error", "O avatar recusou o lote após as retentativas.");
+    }
+    activeBatchRef.current = null;
+    avatarBusyRef.current = false;
+    refreshBatchView();
+    window.setTimeout(() => {
+      dispatchNextBatch();
+      scheduleIdleLoop();
+    }, 100);
+  };
+
+  const retryCurrentAvatarPhrase = () => {
+    if (avatarPlaybackStartedRef.current) return;
+    if (avatarRetryCountRef.current >= LIVE_AVATAR_MAX_RETRIES) {
+      releaseAvatarAfterRetryFailure();
+      return;
+    }
+    const phrase = idleLoopActiveRef.current
+      ? recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1]
+      : activeBatchRef.current;
+    const text = phrase?.glossText || phrase?.text;
+    if (!text) {
+      releaseAvatarAfterRetryFailure();
+      return;
+    }
+    avatarRetryCountRef.current += 1;
+    setAvatarStatus("Reenviando sinais");
+    if (!sendToAvatar({ type: "neotalk:sign", phrase: text })) releaseAvatarAfterRetryFailure();
+    else scheduleAvatarRetry();
+  };
+
+  const scheduleAvatarRetry = () => {
+    clearAvatarRetryTimer();
+    if (avatarPlaybackStartedRef.current) return;
+    avatarRetryTimerRef.current = window.setTimeout(retryCurrentAvatarPhrase, LIVE_AVATAR_RETRY_DELAY_MS);
+  };
+
   const enqueueBatch = (text: string) => {
     const normalized = text.replace(/\s+/g, " ").trim();
     if (!normalized) return;
@@ -297,13 +389,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     dispatchNextBatch();
   };
 
-  const flushWordBuffer = () => {
+  const flushWordBuffer = (force = false) => {
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     batchTimerRef.current = null;
     while (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
       enqueueBatch(wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS).join(" "));
     }
-    if (wordBufferRef.current.length >= LIVE_BATCH_MIN_WORDS) {
+    if (wordBufferRef.current.length >= LIVE_BATCH_MIN_WORDS || (force && wordBufferRef.current.length > 0)) {
       enqueueBatch(wordBufferRef.current.splice(0).join(" "));
     }
   };
@@ -341,6 +433,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(statusLabels[data.status] || data.status);
       } else if (data.type === "neotalk:playing") {
+        clearAvatarRetryTimer();
+        avatarRetryCountRef.current = 0;
+        avatarPlaybackStartedRef.current = true;
         setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
         const wordCount = Array.isArray(data.words) ? data.words.length : 4;
         if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
@@ -349,6 +444,11 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
           Math.max(2600, wordCount * 850),
         );
       } else if (data.type === "neotalk:error") {
+        if (isRetryableAvatarError(data.message)) {
+          setAvatarError("");
+          if (!avatarPlaybackStartedRef.current) scheduleAvatarRetry();
+          return;
+        }
         if (isNonBlockingAvatarError(data.message)) {
           setAvatarError("");
           setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
@@ -378,7 +478,10 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
   const stopLiveRoom = () => {
     listeningRef.current = false;
+    microphoneMutedRef.current = false;
+    setMicrophoneMuted(false);
     clearIdleLoopTimer();
+    clearAvatarRetryTimer();
     idleLoopActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
@@ -387,7 +490,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     recognitionRef.current = null;
     sendToAvatar({ type: "neotalk:pause" });
     setInterimCaption("");
-    flushWordBuffer();
+    flushWordBuffer(true);
     wordBufferRef.current.splice(0);
     setRecording(false);
     const roomId = roomIdRef.current;
@@ -443,7 +546,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       const restartRecognition = (delay = 350) => {
         if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
         restartTimerRef.current = window.setTimeout(() => {
-          if (!listeningRef.current) return;
+          if (!listeningRef.current || microphoneMutedRef.current) return;
           try {
             recognition.start();
             recognitionActivityAtRef.current = Date.now();
@@ -482,18 +585,21 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         }
       };
       recognition.onend = () => {
-        if (!listeningRef.current) return;
+        if (!listeningRef.current || microphoneMutedRef.current) return;
         setAvatarStatus(idleLoopActiveRef.current ? "Loop ativo · renovando escuta" : "Renovando escuta do microfone");
         restartRecognition();
       };
 
       recognitionRef.current = recognition;
+      restartRecognitionRef.current = restartRecognition;
       listeningRef.current = true;
+      microphoneMutedRef.current = false;
+      setMicrophoneMuted(false);
       setRecording(true);
       recognitionActivityAtRef.current = Date.now();
       if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
       recognitionWatchdogRef.current = window.setInterval(() => {
-        if (!listeningRef.current || Date.now() - recognitionActivityAtRef.current < 30000) return;
+        if (!listeningRef.current || microphoneMutedRef.current || Date.now() - recognitionActivityAtRef.current < 30000) return;
         recognitionActivityAtRef.current = Date.now();
         try {
           recognition.abort();
@@ -524,6 +630,29 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     else void startLiveRoom();
   };
 
+  const toggleMicrophone = () => {
+    if (!recording) return;
+    const nextMuted = !microphoneMutedRef.current;
+    microphoneMutedRef.current = nextMuted;
+    setMicrophoneMuted(nextMuted);
+    if (nextMuted) {
+      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
+      setInterimCaption("");
+      flushWordBuffer(true);
+      try { recognitionRef.current?.abort(); } catch { /* reconhecimento já encerrado */ }
+      setAvatarStatus(idleLoopActiveRef.current ? "Microfone mutado · loop ativo" : `${avatarNames[avatar]} aguardando em loop`);
+      scheduleIdleLoop(0);
+    } else {
+      recognitionActivityAtRef.current = Date.now();
+      restartRecognitionRef.current(0);
+      setAvatarStatus("Microfone reativado");
+    }
+  };
+
+  const adjustStageZoom = (delta: number) => {
+    setStageZoom((value) => Math.min(1.5, Math.max(0.7, Math.round((value + delta) * 10) / 10)));
+  };
+
   useEffect(() => () => {
     listeningRef.current = false;
     recognitionRef.current?.abort();
@@ -532,6 +661,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
     if (idleLoopTimerRef.current) window.clearTimeout(idleLoopTimerRef.current);
+    if (avatarRetryTimerRef.current) window.clearTimeout(avatarRetryTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -557,15 +687,16 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     <div className="studio-grid">
       <section className="stage-card">
         <div className="stage-toolbar"><div><span className={recording ? "tag live-tag" : "tag"}>{recording ? "AO VIVO" : "PRÉVIA"}</span><b>Sala · {roomName || "Sem nome"}</b><span className={`avatar-health ${avatarReady ? "connected" : ""}`}><i />{avatarStatus}</span></div><button aria-label="Exibir player e legendas em tela cheia" onClick={() => stageRef.current?.requestFullscreen()}>⛶</button></div>
-        <div ref={stageRef} className={`live-stage ${playerMode}`}>
+        <div ref={stageRef} className={`live-stage ${playerMode}`} style={{ "--stage-zoom": stageZoom } as CSSProperties}>
           <iframe ref={frameRef} className="avatar-widget-frame" title="Avatar 3D NeoTalk" src={widgetUrl} allow="fullscreen" />
           <button className="exit-fullscreen" aria-label="Sair da tela cheia" onClick={() => void document.exitFullscreen()}>×</button>
+          <div className="fullscreen-zoom" aria-label="Zoom da transmissão"><button aria-label="Diminuir zoom" onClick={() => adjustStageZoom(-0.1)}>−</button><button className="zoom-value" aria-label="Restaurar zoom para 100%" onClick={() => setStageZoom(1)}>{Math.round(stageZoom * 100)}%</button><button aria-label="Aumentar zoom" onClick={() => adjustStageZoom(0.1)}>+</button></div>
           <div className="stage-brand">neo<strong>talk</strong></div>
-          <div className="live-captions" aria-live="polite">{recording ? (interimCaption || lastCaption || "Ouvindo…") : "Inicie a sala para capturar o microfone e gerar legendas."}</div>
+          <div className="live-captions" aria-live="polite">{recording ? (microphoneMuted ? (lastCaption || "Microfone mutado · mantendo a tradução em loop") : (interimCaption || lastCaption || "Ouvindo…")) : "Inicie a sala para capturar o microfone e gerar legendas."}</div>
           <span className="stage-language">PT → LIBRAS</span>
           {avatarError && <div className="avatar-error">{avatarError}</div>}
         </div>
-        <div className="capture-controls"><div className={`audio-source ${recording ? "listening" : ""}`}><span>⌁</span><div><small>{recording ? "MICROFONE CAPTURANDO" : "ENTRADA DE ÁUDIO"}</small><b>{microphoneName}</b></div><span className="audio-level" aria-hidden="true"><i/><i/><i/><i/></span></div><button className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{recording ? "Encerrar sala" : "Iniciar sala ao vivo"}</button></div>
+        <div className="capture-controls"><div className={`audio-source ${recording && !microphoneMuted ? "listening" : ""} ${microphoneMuted ? "muted" : ""}`}><span>{microphoneMuted ? "×" : "⌁"}</span><div><small>{microphoneMuted ? "MICROFONE MUTADO" : recording ? "MICROFONE CAPTURANDO" : "ENTRADA DE ÁUDIO"}</small><b>{microphoneName}</b></div><span className="audio-level" aria-hidden="true"><i/><i/><i/><i/></span></div>{recording && <button className={`mute-button ${microphoneMuted ? "active" : ""}`} onClick={toggleMicrophone}>{microphoneMuted ? "Ativar microfone" : "Mutar microfone"}</button>}<button className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{recording ? "Encerrar sala" : "Iniciar sala ao vivo"}</button></div>
       </section>
       <aside className="studio-panel">
         <div className="panel-tabs"><button className="active">Sala</button><button>Legenda</button></div>

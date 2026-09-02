@@ -60,6 +60,12 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /interruptIdleLoopForSpeech/);
   assert.match(liveRoom, /recognitionWatchdogRef/);
   assert.match(liveRoom, /recognition\.abort\(\)/);
+  assert.match(liveRoom, /retryUnprocessable/);
+  assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
+  assert.match(liveRoom, /toggleMicrophone/);
+  assert.match(liveRoom, /Microfone mutado · mantendo a tradução em loop/);
+  assert.match(liveRoom, /--stage-zoom/);
+  assert.match(liveRoom, /Aumentar zoom/);
   assert.match(liveRoom, /infra-avatar3d-oficial\.k3p3ex\.easypanel\.host\/widget/);
   assert.match(liveRoom, /\/rooms\/\$\{roomId\}\/batches/);
   assert.match(liveRoom, /\/agent\/translate/);
@@ -76,6 +82,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /isNonBlockingAvatarError/);
   assert.match(quality, /isNonBlockingAvatarError/);
   assert.match(avatarMessages, /não confirmou \(\?:o \)\?carregamento da pose/);
+  assert.match(avatarMessages, /unprocessable entity/);
   assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);
