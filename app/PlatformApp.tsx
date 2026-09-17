@@ -5,24 +5,24 @@ import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
 import { isNonBlockingAvatarError } from "./avatarMessages";
+import { ApiError, SessionUser, apiRequest, authenticate, loadSession, setSession } from "./apiClient";
 
-export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "login" | "register";
+export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "videos" | "plugins" | "account" | "login" | "register";
 type AvatarId = "lia" | "asuna" | "elia";
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
-const nav = [
-  { id: "dashboard" as View, icon: "home" as IconName, label: "Visão geral", href: "/dashboard" },
+const baseNav = [
   { id: "instances" as View, icon: "broadcast" as IconName, label: "Salas ao vivo", href: "/salas" },
-  { id: "packages" as View, icon: "clock" as IconName, label: "Pacotes e uso", href: "/uso" },
-  { id: "billing" as View, icon: "card" as IconName, label: "Pagamento", href: "/pagamento" },
-  { id: "quality" as View, icon: "sparkles" as IconName, label: "Qualidade", href: "/qualidade" },
+  { id: "videos" as View, icon: "video" as IconName, label: "Tradução de vídeos", href: "/videos", locked: true },
+  { id: "plugins" as View, icon: "plugin" as IconName, label: "Plugins", href: "/plugins", locked: true },
 ];
 
 const viewPaths: Record<View, string> = {
   dashboard: "/dashboard", instances: "/salas", packages: "/uso", billing: "/pagamento",
   quality: "/qualidade", studio: "/salas/ao-vivo", login: "/login", register: "/cadastro",
+  videos: "/videos", plugins: "/plugins", account: "/conta",
 };
 
 const instances = [
@@ -38,6 +38,20 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
   const [seconds, setSeconds] = useState(0);
   const [playerMode, setPlayerMode] = useState<"complete" | "compact">("complete");
   const [toast, setToast] = useState("");
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(view !== "login" && view !== "register");
+
+  useEffect(() => {
+    if (view === "login" || view === "register") return;
+    loadSession().then((activeUser) => {
+      if (["dashboard", "packages", "quality", "billing"].includes(view) && activeUser.role !== "admin") {
+        window.location.replace("/salas");
+        return;
+      }
+      setUser(activeUser);
+    }).catch(() => window.location.replace(`/login?return_to=${encodeURIComponent(window.location.pathname)}`))
+      .finally(() => setAuthLoading(false));
+  }, [view]);
 
   useEffect(() => {
     if (!recording) return;
@@ -69,24 +83,34 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           <div className="caption-demo"><span className="live-dot" /> Tradução preparada para começar</div>
         </section>
         <section className="auth-panel">
-          <form className="auth-card" onSubmit={(e) => { e.preventDefault(); goTo("dashboard"); }}>
-            <span className="mobile-logo"><Logo dark /></span>
-            <p className="eyebrow">NEOTALK EVENTOS</p>
-            <h2>{isLogin ? "Que bom ter você de volta" : "Crie sua conta"}</h2>
-            <p className="muted">{isLogin ? "Acesse sua central de traduções." : "Comece a transmitir acessibilidade em poucos passos."}</p>
-            {!isLogin && <label>Nome completo<input defaultValue="Marina Almeida" /></label>}
-            <label>E-mail<input type="email" defaultValue="marina@empresa.com.br" /></label>
-            <label>Senha<input type="password" defaultValue="neotalk123" /></label>
-            {isLogin && <div className="form-row"><label className="check"><input type="checkbox" defaultChecked /> Lembrar de mim</label><button type="button" className="link">Esqueci a senha</button></div>}
-            <button className="primary wide" type="submit">{isLogin ? "Entrar na plataforma" : "Criar minha conta"}<span>→</span></button>
-            <div className="switch-auth">{isLogin ? "Ainda não tem uma conta?" : "Já possui uma conta?"}<a className="link" href={isLogin ? "/cadastro" : "/login"}>{isLogin ? "Criar conta" : "Entrar"}</a></div>
-          </form>
+          <AuthForm isLogin={isLogin} />
         </section>
       </main>
     );
   }
 
+  if (authLoading || !user) return <main className="session-loading"><Logo dark /><span>Preparando sua plataforma…</span></main>;
+
+  const nav = [
+    ...baseNav,
+    ...(user.role === "admin" ? [
+      { id: "dashboard" as View, icon: "home" as IconName, label: "Visão geral", href: "/dashboard" },
+      { id: "packages" as View, icon: "clock" as IconName, label: "Pacotes e uso", href: "/uso" },
+      { id: "billing" as View, icon: "card" as IconName, label: "Pagamento", href: "/pagamento" },
+      { id: "quality" as View, icon: "sparkles" as IconName, label: "Qualidade", href: "/qualidade" },
+    ] : []),
+  ];
+  const initials = user.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+
+  const logout = async () => {
+    try { await apiRequest<void>("/auth/logout", { method: "POST" }); } finally {
+      setSession(null);
+      window.location.href = "/login";
+    }
+  };
+
   return (
+    <>
     <main className="app-shell">
       <button className={`sidebar-scrim ${sidebarOpen ? "visible" : ""}`} aria-label="Fechar menu" onClick={() => setSidebarOpen(false)} />
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
@@ -100,7 +124,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><span className="help-icon">?</span><strong>Precisa de ajuda?</strong><small>Fale com nosso time</small><button onClick={() => showToast("Atendimento solicitado")}>Abrir atendimento</button></div>
-          <a className="logout" href="/login"><span><Icon name="logout" /></span> Sair</a>
+          <button className="logout" onClick={logout}><span><Icon name="logout" /></span> Sair</button>
         </div>
       </aside>
 
@@ -108,7 +132,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
         <header className="topbar">
           <button className="mobile-menu" aria-label="Abrir menu principal" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button>
           <div className="breadcrumbs"><span>NeoTalk</span><b>/</b>{view === "studio" ? "Estúdio ao vivo" : nav.find((item) => item.id === view)?.label}</div>
-          <div className="top-actions"><a className="top-create" href="/salas/ao-vivo"><Icon name="plus" /> Nova sala</a><button className="icon-button" aria-label="Notificações"><Icon name="bell" /><i>2</i></button><div className="profile"><div className="avatar-initials">MA</div><div><strong>Marina Almeida</strong><small>Empresa Aurora</small></div><span><Icon name="chevron" /></span></div></div>
+          <div className="top-actions"><a className="top-create" href="/salas/ao-vivo"><Icon name="plus" /> Nova sala</a><button className="icon-button" aria-label="Notificações"><Icon name="bell" /></button><a className="profile" href="/conta"><div className="avatar-initials">{initials}</div><div><strong>{user.name}</strong><small>{user.role === "admin" ? "Administrador" : "Conta gratuita"}</small></div><span><Icon name="chevron" /></span></a></div>
         </header>
         <div className="content">
           {view === "dashboard" && <Dashboard onCreate={() => goTo("studio")} onViewAll={() => goTo("instances")} />}
@@ -117,18 +141,104 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
           {view === "quality" && <QualityAdmin showToast={showToast} />}
           {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} />}
+          {(view === "videos" || view === "plugins") && <LockedPreview kind={view} />}
+          {view === "account" && <Account user={user} onReplay={async () => {
+            await apiRequest("/auth/onboarding", { method: "PATCH", body: JSON.stringify({ step: 0, status: "pending" }) });
+            setUser({ ...user, onboarding_version: 0, onboarding_step: 0, onboarding_status: "pending" });
+          }} />}
         </div>
       </section>
       {toast && <div className="toast"><span>✓</span>{toast}</div>}
     </main>
+    {user.onboarding_version < 1 && <Onboarding user={user} onChange={setUser} />}
+    </>
   );
+}
+
+function AuthForm({ isLogin }: { isLogin: boolean }) {
+  const [name, setName] = useState(() => typeof window === "undefined" || isLogin ? "" : new URLSearchParams(window.location.search).get("nome") || "");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const user = await authenticate(isLogin ? "login" : "register", { ...(isLogin ? {} : { name }), email, password });
+      const returnTo = new URLSearchParams(window.location.search).get("return_to");
+      window.location.href = returnTo?.startsWith("/") ? returnTo : (user.role === "admin" ? "/qualidade" : "/salas");
+    } catch (reason) { setError(reason instanceof ApiError ? reason.message : "Não foi possível entrar agora."); }
+    finally { setBusy(false); }
+  };
+  return <form className="auth-card" onSubmit={submit}>
+    <span className="mobile-logo"><Logo dark /></span><p className="eyebrow">NEOTALK EVENTOS</p>
+    <h2>{isLogin ? "Que bom ter você de volta" : "Crie sua conta grátis"}</h2>
+    <p className="muted">{isLogin ? "Acesse sua central de traduções." : "A beta está aberta e não exige cartão."}</p>
+    {!isLogin && <label>Nome completo<input autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} /></label>}
+    <label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+    <label>Senha<input type="password" minLength={isLogin ? undefined : 10} autoComplete={isLogin ? "current-password" : "new-password"} required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+    {!isLogin && <small className="password-hint">Use pelo menos 10 caracteres.</small>}
+    {error && <div className="auth-error" role="alert">{error}</div>}
+    <button className="primary wide" type="submit" disabled={busy}>{busy ? "Aguarde…" : isLogin ? "Entrar na plataforma" : "Criar minha conta"}<span>→</span></button>
+    <div className="switch-auth">{isLogin ? "Ainda não tem uma conta?" : "Já possui uma conta?"}<a className="link" href={isLogin ? "/cadastro" : "/login"}>{isLogin ? "Criar conta" : "Entrar"}</a></div>
+  </form>;
+}
+
+function LockedPreview({ kind }: { kind: "videos" | "plugins" }) {
+  const video = kind === "videos";
+  return <section className="locked-preview">
+    <span className="locked-kicker">EM BREVE</span>
+    <div className="locked-icon"><Icon name={video ? "video" : "plugin"} /></div>
+    <h1>{video ? "Tradução de vídeos" : "Plugins e integrações"}</h1>
+    <p>{video ? "Envie um vídeo e receba uma versão acessível com Libras e legendas." : "Conecte a NeoTalk ao OBS, reuniões e plataformas de transmissão."}</p>
+    <span className="locked-badge">🔒 Disponível em uma próxima versão</span>
+  </section>;
+}
+
+function Account({ user, onReplay }: { user: SessionUser; onReplay: () => Promise<void> }) {
+  return <><div className="page-heading"><div><p className="eyebrow">SUA CONTA</p><h1>Perfil</h1><p>Dados usados para acessar a plataforma.</p></div></div>
+    <section className="account-card"><div className="account-avatar">{user.name.split(/\s+/).slice(0,2).map((p) => p[0]).join("").toUpperCase()}</div><div><h2>{user.name}</h2><p>{user.email}</p><span>{user.role === "admin" ? "Administrador" : "Beta gratuita"}</span></div><button className="secondary" onClick={() => void onReplay()}>Refazer tutorial</button></section></>;
+}
+
+const onboardingSteps = [
+  { title: "Bem-vindo à NeoTalk", body: "Você já pode criar sua sala gratuita de tradução em Libras." },
+  { title: "Sua sala ao vivo", body: "Cada conta mantém uma sala ativa por vez. Finalize a atual para começar outra." },
+  { title: "Permita o microfone", body: "Ao iniciar a transmissão, o navegador pedirá sua autorização para ouvir e transcrever." },
+  { title: "Acompanhe a tradução", body: "Legenda e avatar continuam visíveis na tela cheia, com controles de áudio e zoom." },
+  { title: "Tudo pronto", body: "Crie uma sala, escolha o avatar e comece a falar. O tutorial pode ser reaberto no seu perfil." },
+];
+
+function Onboarding({ user, onChange }: { user: SessionUser; onChange: (user: SessionUser) => void }) {
+  const [step, setStep] = useState(Math.min(user.onboarding_step, onboardingSteps.length - 1));
+  const [busy, setBusy] = useState(false);
+  const finish = async (status: "completed" | "skipped") => {
+    setBusy(true);
+    try {
+      await apiRequest("/auth/onboarding", { method: "PATCH", body: JSON.stringify({ step: step + 1, status }) });
+      onChange({ ...user, onboarding_version: 1, onboarding_step: step + 1, onboarding_status: status });
+      if (status === "completed") window.location.href = "/salas/ao-vivo";
+    } finally { setBusy(false); }
+  };
+  const next = async () => {
+    if (step === onboardingSteps.length - 1) return finish("completed");
+    const nextStep = step + 1;
+    setStep(nextStep);
+    await apiRequest("/auth/onboarding", { method: "PATCH", body: JSON.stringify({ step: nextStep, status: "pending" }) });
+  };
+  return <div className="onboarding-backdrop" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><section className="onboarding-card">
+    <div className="onboarding-progress">{onboardingSteps.map((_, index) => <i key={index} className={index <= step ? "active" : ""} />)}</div>
+    <span className="onboarding-count">PASSO {step + 1} DE {onboardingSteps.length}</span>
+    <h2 id="onboarding-title">{onboardingSteps[step].title}</h2><p>{onboardingSteps[step].body}</p>
+    {step === 2 && <button className="mic-test" type="button" onClick={async (event) => { const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); stream.getTracks().forEach((track) => track.stop()); (event.currentTarget as HTMLButtonElement).textContent = "✓ Microfone autorizado"; }}>Testar microfone</button>}
+    <div className="onboarding-actions"><button className="link" disabled={busy} onClick={() => void finish("skipped")}>Pular tutorial</button><button className="primary" disabled={busy} onClick={() => void next()}>{step === onboardingSteps.length - 1 ? "Criar minha sala" : "Continuar"} →</button></div>
+  </section></div>;
 }
 
 function Logo({ dark = false }: { dark?: boolean }) {
   return <div className={`logo ${dark ? "dark" : ""}`}><img src="/neotalk-logo.png" alt="NeoTalk" /><small>EVENTOS</small></div>;
 }
 
-type IconName = "home" | "broadcast" | "clock" | "card" | "sparkles" | "logout" | "menu" | "plus" | "bell" | "chevron";
+type IconName = "home" | "broadcast" | "clock" | "card" | "sparkles" | "video" | "plugin" | "logout" | "menu" | "plus" | "bell" | "chevron";
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -137,6 +247,8 @@ function Icon({ name }: { name: IconName }) {
     clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
     card: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></>,
     sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3Z"/><path d="m18.5 14 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z"/><path d="m5 13 .8 2.2L8 16l-2.2.8L5 19l-.8-2.2L2 16l2.2-.8L5 13Z"/></>,
+    video: <><rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 9 4-2v10l-4-2"/></>,
+    plugin: <><path d="M8 3v4M16 3v4M5 7h14v4a7 7 0 0 1-14 0V7Z"/><path d="M12 18v3"/></>,
     logout: <><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4"/><path d="M8 12h10"/></>,
     menu: <><path d="M4 7h16M4 12h16M4 17h16"/></>,
     plus: <><path d="M12 5v14M5 12h14"/></>,

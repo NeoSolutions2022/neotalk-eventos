@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isNonBlockingAvatarError } from "./avatarMessages";
+import { apiRequest } from "./apiClient";
 
 type Prompt = { id: string; name: string; instructions: string; version: number; is_active: boolean; created_at: string };
 type AvatarId = "lia" | "asuna" | "elia";
@@ -23,20 +24,11 @@ type QualityRun = {
   reasoning_summary?: string;
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 const widgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || `Falha da API (${response.status})`);
-  }
-  return response.json() as Promise<T>;
+  return apiRequest<T>(path, options);
 }
 
 export default function QualityAdmin({ showToast }: { showToast: (message: string) => void }) {

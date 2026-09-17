@@ -14,22 +14,20 @@ async function render(path = "/") {
   );
 }
 
-test("server-renders the NeoTalk live rooms product", async () => {
+test("server-renders the authenticated NeoTalk shell without leaking protected content", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /NeoTalk Eventos/);
-  assert.match(html, /Salas ao vivo/);
-  assert.match(html, /Criar sala ao vivo/);
-  assert.match(html, /Microfone em tempo real/);
-  assert.match(html, /Lia 3D integrada/);
+  assert.match(html, /Preparando sua plataforma/);
+  assert.doesNotMatch(html, /Congresso Inova 2026/);
   assert.doesNotMatch(html, /Your site is taking shape|Building your site/);
 });
 
 test("serves every primary product route directly", async () => {
-  const routes = ["/dashboard", "/salas", "/salas/ao-vivo", "/uso", "/pagamento", "/qualidade", "/login", "/cadastro"];
+  const routes = ["/dashboard", "/salas", "/salas/ao-vivo", "/uso", "/pagamento", "/qualidade", "/login", "/cadastro", "/conta", "/videos", "/plugins"];
   for (const route of routes) {
     const response = await render(route);
     assert.equal(response.status, 200, route);
@@ -38,7 +36,7 @@ test("serves every primary product route directly", async () => {
 });
 
 test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
-  const [liveRoom, quality, rooms, compose, api, services, avatarMessages] = await Promise.all([
+  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/QualityAdmin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/Rooms.tsx", import.meta.url), "utf8"),
@@ -46,6 +44,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
     readFile(new URL("../backend/app/main.py", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/services.py", import.meta.url), "utf8"),
     readFile(new URL("../app/avatarMessages.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/apiClient.ts", import.meta.url), "utf8"),
+    readFile(new URL("../backend/app/auth.py", import.meta.url), "utf8"),
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
@@ -83,13 +83,20 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(quality, /isNonBlockingAvatarError/);
   assert.match(avatarMessages, /não confirmou \(\?:o \)\?carregamento da pose/);
   assert.match(avatarMessages, /unprocessable entity/);
-  assert.match(rooms, /fetch\(`\$\{apiBase\}\/rooms`\)/);
+  assert.match(rooms, /apiRequest<Room\[]>\("\/rooms"\)/);
+  assert.match(apiClient, /credentials: "include"/);
+  assert.match(apiClient, /X-CSRF-Token/);
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms"/);
   assert.match(api, /@app\.patch\("\/api\/v1\/batches\/\{batch_id\}"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/quality-runs"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/dataset\/sync"/);
+  assert.match(api, /Depends\(admin_csrf\)/);
+  assert.match(api, /Finalize sua sala atual antes de criar outra/);
+  assert.match(auth, /PasswordHasher/);
+  assert.match(auth, /httponly=True/);
+  assert.match(auth, /token_hash/);
   assert.match(services, /OPENAI_BASE_URL.*api\.openai\.com\/v1/);
   assert.match(services, /prompt_cache_key/);
   assert.match(services, /AGENT_CONTEXT_CACHE_TTL_SECONDS/);

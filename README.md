@@ -2,6 +2,10 @@
 
 Protótipo visual navegável para gerenciamento de traduções em Libras.
 
+## Beta pública
+
+A especificação funcional e de segurança para transformar o protótipo em uma beta pública está em [docs/BETA_PUBLICA.md](docs/BETA_PUBLICA.md). Ela define autenticação, papéis `user` e `admin`, isolamento das salas, funcionalidades bloqueadas, migração do banco e critérios de aceite para publicação.
+
 ## Escopo atual
 
 - Login e criação de conta

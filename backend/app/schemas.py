@@ -9,6 +9,22 @@ AvatarId = Literal["lia", "asuna", "elia"]
 BatchStatus = Literal["queued", "translating", "done", "error"]
 
 
+class RegisterIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=10, max_length=128)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class OnboardingUpdate(BaseModel):
+    step: int = Field(default=0, ge=0, le=5)
+    status: Literal["pending", "completed", "skipped"] = "pending"
+
+
 class RoomCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     avatar: AvatarId = "lia"

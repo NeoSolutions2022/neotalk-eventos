@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiRequest } from "./apiClient";
 
 type Room = {
   id: string;
@@ -12,8 +13,6 @@ type Room = {
   duration_seconds: number;
   batch_count: number;
 };
-
-const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 function durationLabel(totalSeconds: number) {
   const hours = Math.floor(totalSeconds / 3600);
@@ -33,11 +32,7 @@ export default function Rooms({ onCreate }: { onCreate: () => void }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`${apiBase}/rooms`)
-      .then((response) => {
-        if (!response.ok) throw new Error("Falha ao carregar salas");
-        return response.json() as Promise<Room[]>;
-      })
+    apiRequest<Room[]>("/rooms")
       .then(setRooms)
       .catch(() => setError("Não foi possível carregar o histórico agora."))
       .finally(() => setLoading(false));

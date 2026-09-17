@@ -14,6 +14,32 @@ DATABASE_URL = os.getenv(
 SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(120) NOT NULL,
+    email VARCHAR(254) NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role VARCHAR(16) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    onboarding_version INTEGER NOT NULL DEFAULT 0,
+    onboarding_step INTEGER NOT NULL DEFAULT 0,
+    onboarding_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    onboarding_completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    csrf_token VARCHAR(96) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS rooms (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(160) NOT NULL,
@@ -25,6 +51,8 @@ CREATE TABLE IF NOT EXISTS rooms (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
 
 CREATE TABLE IF NOT EXISTS translation_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -103,6 +131,8 @@ CREATE TABLE IF NOT EXISTS quality_ratings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rooms_created_at ON rooms(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rooms_user_created_at ON rooms(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(token_hash) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_batches_room_sequence ON translation_batches(room_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_quality_runs_created_at ON quality_runs(created_at DESC);
 
@@ -117,6 +147,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
     async with pool.acquire() as connection:
         await connection.execute(SCHEMA_SQL)
+        from .auth import ensure_bootstrap_admin
+        await ensure_bootstrap_admin(connection)
     app.state.db = pool
     yield
     await pool.close()

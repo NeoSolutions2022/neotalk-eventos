@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessages";
+import { ApiError, apiRequest } from "./apiClient";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -27,7 +28,6 @@ type BatchResponse = { id: string; status: string };
 type AgentTranslation = { gloss_text: string; prompt_id: string; model: string; agent_latency_ms: number };
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
-const liveRoomsApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 const LIVE_BATCH_MIN_WORDS = 2;
 const LIVE_BATCH_MAX_WORDS = 12;
@@ -39,19 +39,8 @@ const LIVE_API_RETRY_DELAYS_MS = [350, 800];
 const LIVE_AVATAR_RETRY_DELAY_MS = 900;
 const LIVE_AVATAR_MAX_RETRIES = 2;
 
-class RoomApiError extends Error {
-  constructor(public status: number) {
-    super(`Falha da API (${status})`);
-  }
-}
-
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${liveRoomsApiBase}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-  });
-  if (!response.ok) throw new RoomApiError(response.status);
-  return response.json() as Promise<T>;
+  return apiRequest<T>(path, options);
 }
 
 async function retryUnprocessable<T>(request: () => Promise<T>): Promise<T> {
@@ -59,7 +48,7 @@ async function retryUnprocessable<T>(request: () => Promise<T>): Promise<T> {
     try {
       return await request();
     } catch (reason) {
-      if (!(reason instanceof RoomApiError) || reason.status !== 422 || attempt >= LIVE_API_RETRY_DELAYS_MS.length) throw reason;
+      if (!(reason instanceof ApiError) || reason.status !== 422 || attempt >= LIVE_API_RETRY_DELAYS_MS.length) throw reason;
       await new Promise((resolve) => window.setTimeout(resolve, LIVE_API_RETRY_DELAYS_MS[attempt]));
     }
   }
@@ -284,7 +273,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }).catch((reason) => {
       const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
       batch.status = "error";
-      if (!(reason instanceof RoomApiError) || reason.status !== 422) setAvatarError(message);
+      if (!(reason instanceof ApiError) || reason.status !== 422) setAvatarError(message);
       void updateRemoteBatch(batch.id, "error", message);
     }).finally(() => {
       agentPromisesRef.current.delete(batch.id);
@@ -522,11 +511,21 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       stream.getTracks().forEach((item) => item.stop());
 
       setBackendStatus("Criando sala");
-      const room = await roomApi<RoomResponse>("/rooms", {
-        method: "POST",
-        body: JSON.stringify({ name: roomName.trim() || "Sala ao vivo", avatar }),
-      });
-      createdRoomId = room.id;
+      let room: RoomResponse;
+      try {
+        room = await roomApi<RoomResponse>("/rooms", {
+          method: "POST",
+          body: JSON.stringify({ name: roomName.trim() || "Sala ao vivo", avatar }),
+        });
+        createdRoomId = room.id;
+      } catch (reason) {
+        if (!(reason instanceof ApiError) || reason.status !== 409) throw reason;
+        const rooms = await roomApi<RoomResponse[]>("/rooms");
+        const activeRoom = rooms.find((item) => item.status === "ready" || item.status === "live");
+        if (!activeRoom) throw reason;
+        room = activeRoom;
+        setBackendStatus("Retomando sua sala ativa");
+      }
       await roomApi<RoomResponse>(`/rooms/${room.id}/start`, { method: "POST" });
       roomIdRef.current = room.id;
       roomStartedAtRef.current = Date.now();
