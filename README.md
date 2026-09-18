@@ -66,7 +66,7 @@ Depois da primeira subida, sincronize o catálogo pelo botão **Sincronizar** em
 curl -X POST http://localhost:8000/api/v1/admin/dataset/sync
 ```
 
-O frontend usa `http://localhost:8000/api/v1` para o histórico das salas. A URL pode ser alterada com `NEXT_PUBLIC_API_URL` durante o build.
+No EasyPanel, o navegador usa `/api/v1` no próprio domínio da plataforma. O serviço web encaminha essas chamadas para `http://api:8000/api/v1` pela rede interna do Compose, evitando conflito de CORS e garantindo que o cookie de sessão pertença a `plataforma.neotalk.app`.
 
 Para utilizar outra porta no computador:
 
@@ -84,3 +84,5 @@ docker compose down
 ## EasyPanel
 
 Para produção no EasyPanel, use `compose.easypanel.yaml`. O guia completo de configuração, domínios e primeira sincronização está em [EASYPANEL.md](EASYPANEL.md). Os valores reais devem ser cadastrados como variáveis do painel e nunca versionados.
+
+Defina `APP_PUBLIC_ORIGIN=https://plataforma.neotalk.app` e, para aceitar a entrada automática do formulário, `LEAD_FORM_ORIGIN=https://neotalk.app`. Não configure uma lista separada em `NEXT_PUBLIC_API_URL`: o Compose fixa o cliente em `/api/v1` e mantém a API interna fora do navegador.

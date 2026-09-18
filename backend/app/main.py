@@ -1,4 +1,6 @@
 import os
+import secrets
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import asyncpg
@@ -23,7 +25,10 @@ from .schemas import (
     RoomFinish,
     RoomOut,
     LoginIn,
+    LeadAccessIn,
+    HandoffConsumeIn,
     OnboardingUpdate,
+    PasswordSetIn,
     RegisterIn,
 )
 from .services import (
@@ -81,6 +86,8 @@ async def register(payload: RegisterIn, response: Response, request: Request, po
     enforce_rate_limit(request, "register", 8, 3600)
     email = normalize_email(payload.email)
     name = " ".join(payload.name.split())
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="Informe seu nome.")
     try:
         row = await pool.fetchrow(
             """INSERT INTO users(name,email,password_hash) VALUES($1,$2,$3)
@@ -90,7 +97,7 @@ async def register(payload: RegisterIn, response: Response, request: Request, po
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail="Já existe uma conta com este e-mail.")
     csrf = await create_session(pool, row["id"], response)
-    return {**record_dict(row), "csrf_token": csrf}
+    return {**record_dict(row), "csrf_token": csrf, "password_set": True}
 
 
 @app.post("/api/v1/auth/login")
@@ -105,7 +112,82 @@ async def login(payload: LoginIn, response: Response, request: Request, pool: as
         "id": row["id"], "name": row["name"], "email": row["email"], "role": row["role"],
         "csrf_token": csrf, "onboarding_version": row["onboarding_version"],
         "onboarding_step": row["onboarding_step"], "onboarding_status": row["onboarding_status"],
+        "password_set": row["password_set"],
     }
+
+
+@app.post("/api/v1/auth/lead-access", status_code=status.HTTP_201_CREATED)
+async def create_lead_access(
+    payload: LeadAccessIn,
+    request: Request,
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> dict:
+    """Create a short-lived, one-time login only for a brand-new form lead."""
+    enforce_rate_limit(request, "lead-access", 12, 3600)
+    email = normalize_email(payload.email)
+    name = " ".join(payload.name.split())
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="Informe seu nome.")
+    raw_code = secrets.token_urlsafe(48)
+    expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            if await connection.fetchval("SELECT 1 FROM users WHERE email=$1", email):
+                return {"status": "existing_account"}
+            try:
+                user_id = await connection.fetchval(
+                    """INSERT INTO users(name,email,password_hash,password_set)
+                       VALUES($1,$2,$3,FALSE) RETURNING id""",
+                    name, email, hash_password(secrets.token_urlsafe(48)),
+                )
+            except asyncpg.UniqueViolationError:
+                return {"status": "existing_account"}
+            await connection.execute(
+                """INSERT INTO lead_access_tickets(user_id,token_hash,source,expires_at)
+                   VALUES($1,$2,$3,$4)""",
+                user_id, token_hash(raw_code), payload.source.strip(), expires,
+            )
+    return {"status": "created", "code": raw_code, "expires_in": 300}
+
+
+@app.post("/api/v1/auth/lead-access/consume")
+async def consume_lead_access(
+    payload: HandoffConsumeIn,
+    response: Response,
+    request: Request,
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> dict:
+    enforce_rate_limit(request, "lead-access-consume", 20, 900)
+    row = await pool.fetchrow(
+        """UPDATE lead_access_tickets SET consumed_at=NOW()
+           WHERE token_hash=$1 AND consumed_at IS NULL AND expires_at > NOW()
+           RETURNING user_id""",
+        token_hash(payload.code),
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Este acesso expirou ou já foi utilizado.")
+    user = await pool.fetchrow(
+        """SELECT id,name,email,role,onboarding_version,onboarding_step,onboarding_status,password_set
+           FROM users WHERE id=$1 AND status='active'""",
+        row["user_id"],
+    )
+    if not user:
+        raise HTTPException(status_code=401, detail="Conta indisponível.")
+    csrf = await create_session(pool, user["id"], response)
+    return {**record_dict(user), "csrf_token": csrf}
+
+
+@app.post("/api/v1/auth/password")
+async def set_account_password(
+    payload: PasswordSetIn,
+    user: CurrentUser = Depends(csrf_user),
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> dict:
+    await pool.execute(
+        "UPDATE users SET password_hash=$2,password_set=TRUE,updated_at=NOW() WHERE id=$1",
+        user.id, hash_password(payload.password),
+    )
+    return {"password_set": True}
 
 
 @app.get("/api/v1/auth/me")

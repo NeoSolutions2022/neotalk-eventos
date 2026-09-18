@@ -27,7 +27,7 @@ test("server-renders the authenticated NeoTalk shell without leaking protected c
 });
 
 test("serves every primary product route directly", async () => {
-  const routes = ["/dashboard", "/salas", "/salas/ao-vivo", "/uso", "/pagamento", "/qualidade", "/login", "/cadastro", "/conta", "/videos", "/plugins"];
+  const routes = ["/dashboard", "/salas", "/salas/ao-vivo", "/uso", "/pagamento", "/qualidade", "/login", "/cadastro", "/acesso", "/conta", "/videos", "/plugins"];
   for (const route of routes) {
     const response = await render(route);
     assert.equal(response.status, 200, route);

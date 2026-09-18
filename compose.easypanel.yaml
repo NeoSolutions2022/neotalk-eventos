@@ -22,7 +22,7 @@ services:
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgresql://neotalk:${POSTGRES_PASSWORD}@postgres:5432/neotalk
-      CORS_ORIGINS: ${APP_PUBLIC_ORIGIN}
+      CORS_ORIGINS: ${APP_PUBLIC_ORIGIN},${LEAD_FORM_ORIGIN:-https://neotalk.app}
       NEOTALK_API_KEY: ${NEOTALK_API_KEY}
       NEOTALK_API_BASE_URL: ${NEOTALK_API_BASE_URL:-https://infra-neotalk-api.k3p3ex.easypanel.host}
       NEOTALK_API_TIMEOUT_SECONDS: ${NEOTALK_API_TIMEOUT_SECONDS:-30}
@@ -61,10 +61,11 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_AVATAR_WIDGET_URL: ${NEXT_PUBLIC_AVATAR_WIDGET_URL:-https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget}
-        NEXT_PUBLIC_API_URL: ${API_PUBLIC_ORIGIN}/api/v1
+        NEXT_PUBLIC_API_URL: /api/v1
     environment:
       NODE_ENV: production
       PORT: 3000
+      INTERNAL_API_URL: http://api:8000/api/v1
     expose:
       - "3000"
     depends_on:

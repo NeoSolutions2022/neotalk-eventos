@@ -5,9 +5,9 @@ import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
 import { isNonBlockingAvatarError } from "./avatarMessages";
-import { ApiError, SessionUser, apiRequest, authenticate, loadSession, setSession } from "./apiClient";
+import { ApiError, SessionUser, apiRequest, authenticate, consumeLeadAccess, loadSession, setSession } from "./apiClient";
 
-export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "videos" | "plugins" | "account" | "login" | "register";
+export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "videos" | "plugins" | "account" | "login" | "register" | "handoff";
 type AvatarId = "lia" | "asuna" | "elia";
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
@@ -23,6 +23,7 @@ const viewPaths: Record<View, string> = {
   dashboard: "/dashboard", instances: "/salas", packages: "/uso", billing: "/pagamento",
   quality: "/qualidade", studio: "/salas/ao-vivo", login: "/login", register: "/cadastro",
   videos: "/videos", plugins: "/plugins", account: "/conta",
+  handoff: "/acesso",
 };
 
 const instances = [
@@ -39,10 +40,10 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
   const [playerMode, setPlayerMode] = useState<"complete" | "compact">("complete");
   const [toast, setToast] = useState("");
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(view !== "login" && view !== "register");
+  const [authLoading, setAuthLoading] = useState(!["login", "register", "handoff"].includes(view));
 
   useEffect(() => {
-    if (view === "login" || view === "register") return;
+    if (view === "login" || view === "register" || view === "handoff") return;
     loadSession().then((activeUser) => {
       if (["dashboard", "packages", "quality", "billing"].includes(view) && activeUser.role !== "admin") {
         window.location.replace("/salas");
@@ -68,6 +69,8 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
   const showToast = (message: string) => setToast(message);
   const goTo = (target: View) => { window.location.href = viewPaths[target]; };
   const time = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+
+  if (view === "handoff") return <LeadAccess />;
 
   if (view === "login" || view === "register") {
     const isLogin = view === "login";
@@ -132,7 +135,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
         <header className="topbar">
           <button className="mobile-menu" aria-label="Abrir menu principal" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button>
           <div className="breadcrumbs"><span>NeoTalk</span><b>/</b>{view === "studio" ? "Estúdio ao vivo" : nav.find((item) => item.id === view)?.label}</div>
-          <div className="top-actions"><a className="top-create" href="/salas/ao-vivo"><Icon name="plus" /> Nova sala</a><button className="icon-button" aria-label="Notificações"><Icon name="bell" /></button><a className="profile" href="/conta"><div className="avatar-initials">{initials}</div><div><strong>{user.name}</strong><small>{user.role === "admin" ? "Administrador" : "Conta gratuita"}</small></div><span><Icon name="chevron" /></span></a></div>
+          <div className="top-actions">{!user.password_set && <a className="secure-account" href="/conta">Definir senha</a>}<a className="top-create" href="/salas/ao-vivo"><Icon name="plus" /> Nova sala</a><button className="icon-button" aria-label="Notificações"><Icon name="bell" /></button><a className="profile" href="/conta"><div className="avatar-initials">{initials}</div><div><strong>{user.name}</strong><small>{user.role === "admin" ? "Administrador" : "Conta gratuita"}</small></div><span><Icon name="chevron" /></span></a></div>
         </header>
         <div className="content">
           {view === "dashboard" && <Dashboard onCreate={() => goTo("studio")} onViewAll={() => goTo("instances")} />}
@@ -184,6 +187,25 @@ function AuthForm({ isLogin }: { isLogin: boolean }) {
   </form>;
 }
 
+function LeadAccess() {
+  const [message, setMessage] = useState("Preparando seu acesso gratuito…");
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("code") || "";
+    window.history.replaceState({}, "", "/acesso");
+    if (!code) {
+      window.location.replace("/login");
+      return;
+    }
+    consumeLeadAccess(code)
+      .then(() => window.location.replace("/salas"))
+      .catch(() => {
+        setMessage("Este acesso expirou. Entre com sua conta ou refaça o formulário.");
+        window.setTimeout(() => window.location.replace("/login"), 2400);
+      });
+  }, []);
+  return <main className="session-loading"><Logo dark /><span>{message}</span></main>;
+}
+
 function LockedPreview({ kind }: { kind: "videos" | "plugins" }) {
   const video = kind === "videos";
   return <section className="locked-preview">
@@ -196,8 +218,20 @@ function LockedPreview({ kind }: { kind: "videos" | "plugins" }) {
 }
 
 function Account({ user, onReplay }: { user: SessionUser; onReplay: () => Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [saved, setSaved] = useState(user.password_set);
+  const [error, setError] = useState("");
+  const savePassword = async (event: React.FormEvent) => {
+    event.preventDefault(); setError("");
+    try {
+      await apiRequest("/auth/password", { method: "POST", body: JSON.stringify({ password }) });
+      setSaved(true); setPassword("");
+    } catch (reason) { setError(reason instanceof ApiError ? reason.message : "Não foi possível salvar a senha."); }
+  };
   return <><div className="page-heading"><div><p className="eyebrow">SUA CONTA</p><h1>Perfil</h1><p>Dados usados para acessar a plataforma.</p></div></div>
-    <section className="account-card"><div className="account-avatar">{user.name.split(/\s+/).slice(0,2).map((p) => p[0]).join("").toUpperCase()}</div><div><h2>{user.name}</h2><p>{user.email}</p><span>{user.role === "admin" ? "Administrador" : "Beta gratuita"}</span></div><button className="secondary" onClick={() => void onReplay()}>Refazer tutorial</button></section></>;
+    <section className="account-card"><div className="account-avatar">{user.name.split(/\s+/).slice(0,2).map((p) => p[0]).join("").toUpperCase()}</div><div><h2>{user.name}</h2><p>{user.email}</p><span>{user.role === "admin" ? "Administrador" : "Beta gratuita"}</span></div><button className="secondary" onClick={() => void onReplay()}>Refazer tutorial</button></section>
+    {!saved && <form className="account-password" onSubmit={savePassword}><div><p className="eyebrow">PROTEJA SEU ACESSO</p><h2>Crie uma senha para entrar novamente</h2><p>Você veio pelo formulário e já entrou automaticamente. Defina uma senha antes de sair.</p></div><label>Nova senha<input type="password" minLength={10} autoComplete="new-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Pelo menos 10 caracteres" /></label>{error && <div className="auth-error" role="alert">{error}</div>}<button className="primary" type="submit">Salvar senha</button></form>}
+  </>;
 }
 
 const onboardingSteps = [

@@ -9,6 +9,7 @@ export type SessionUser = {
   onboarding_version: number;
   onboarding_step: number;
   onboarding_status: "pending" | "completed" | "skipped";
+  password_set: boolean;
 };
 
 export class ApiError extends Error {
@@ -43,6 +44,15 @@ export async function loadSession(): Promise<SessionUser> {
 
 export async function authenticate(kind: "login" | "register", data: Record<string, string>) {
   const user = await apiRequest<SessionUser>(`/auth/${kind}`, { method: "POST", body: JSON.stringify(data) });
+  setSession(user);
+  return user;
+}
+
+export async function consumeLeadAccess(code: string) {
+  const user = await apiRequest<SessionUser>("/auth/lead-access/consume", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
   setSession(user);
   return user;
 }

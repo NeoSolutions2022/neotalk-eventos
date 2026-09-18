@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(120) NOT NULL,
     email VARCHAR(254) NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    password_set BOOLEAN NOT NULL DEFAULT TRUE,
     role VARCHAR(16) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     onboarding_version INTEGER NOT NULL DEFAULT 0,
@@ -29,6 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set BOOLEAN NOT NULL DEFAULT TRUE;
+
 CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -38,6 +41,16 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     revoked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS lead_access_tickets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    source VARCHAR(80) NOT NULL DEFAULT 'acesso',
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS rooms (
@@ -133,6 +146,7 @@ CREATE TABLE IF NOT EXISTS quality_ratings (
 CREATE INDEX IF NOT EXISTS idx_rooms_created_at ON rooms(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rooms_user_created_at ON rooms(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lead_access_token ON lead_access_tickets(token_hash) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_batches_room_sequence ON translation_batches(room_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_quality_runs_created_at ON quality_runs(created_at DESC);
 

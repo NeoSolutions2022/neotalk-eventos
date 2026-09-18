@@ -34,6 +34,7 @@ class CurrentUser:
     onboarding_version: int
     onboarding_step: int
     onboarding_status: str
+    password_set: bool
 
 
 def normalize_email(value: str) -> str:
@@ -94,7 +95,7 @@ async def current_user(
     row = await pool.fetchrow(
         """
         SELECT u.id,u.name,u.email,u.role,u.status,u.onboarding_version,u.onboarding_step,
-               u.onboarding_status,s.csrf_token
+               u.onboarding_status,u.password_set,s.csrf_token
         FROM user_sessions s JOIN users u ON u.id=s.user_id
         WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
         """, token_hash(session),
@@ -130,6 +131,7 @@ def user_payload(user: CurrentUser) -> dict:
         "id": user.id, "name": user.name, "email": user.email, "role": user.role,
         "csrf_token": user.csrf_token, "onboarding_version": user.onboarding_version,
         "onboarding_step": user.onboarding_step, "onboarding_status": user.onboarding_status,
+        "password_set": user.password_set,
     }
 
 

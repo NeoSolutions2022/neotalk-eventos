@@ -20,6 +20,20 @@ class LoginIn(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class LeadAccessIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=254)
+    source: str = Field(default="acesso", min_length=1, max_length=80)
+
+
+class HandoffConsumeIn(BaseModel):
+    code: str = Field(min_length=32, max_length=256)
+
+
+class PasswordSetIn(BaseModel):
+    password: str = Field(min_length=10, max_length=128)
+
+
 class OnboardingUpdate(BaseModel):
     step: int = Field(default=0, ge=0, le=5)
     status: Literal["pending", "completed", "skipped"] = "pending"
