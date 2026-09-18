@@ -1,6 +1,8 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from uuid import UUID
 
 import asyncpg
 from fastapi import FastAPI, Request
@@ -156,6 +158,33 @@ WHERE NOT EXISTS (SELECT 1 FROM agent_prompts);
 """
 
 
+async def expire_stale_rooms(pool: asyncpg.Pool, user_id: UUID | None = None) -> int:
+    result = await pool.execute(
+        """
+        UPDATE rooms SET status='finished', ended_at=COALESCE(ended_at,NOW()),
+        duration_seconds=CASE WHEN started_at IS NULL THEN duration_seconds
+          ELSE GREATEST(duration_seconds, EXTRACT(EPOCH FROM (NOW()-started_at))::INTEGER) END,
+        updated_at=NOW()
+        WHERE status IN ('ready','live')
+          AND (($1::UUID IS NULL) OR user_id=$1)
+          AND ((status='ready' AND updated_at < NOW()-INTERVAL '15 minutes')
+            OR (status='live' AND updated_at < NOW()-INTERVAL '2 minutes'))
+        """,
+        user_id,
+    )
+    return int(result.split()[-1])
+
+
+async def reap_stale_rooms(pool: asyncpg.Pool) -> None:
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await expire_stale_rooms(pool)
+        except Exception:
+            # A falha de uma rodada não pode derrubar a API; a próxima tenta novamente.
+            continue
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
@@ -164,7 +193,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from .auth import ensure_bootstrap_admin
         await ensure_bootstrap_admin(connection)
     app.state.db = pool
+    reaper = asyncio.create_task(reap_stale_rooms(pool))
     yield
+    reaper.cancel()
+    with suppress(asyncio.CancelledError):
+        await reaper
     await pool.close()
 
 

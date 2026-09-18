@@ -19,7 +19,7 @@ A especificação funcional e de segurança para transformar o protótipo em uma
 - Backend FastAPI e PostgreSQL para persistir salas, duração, transcrições e estado dos lotes
 - Opções visuais para abrir ou compartilhar o player
 
-O widget do avatar está conectado por `iframe` e `postMessage`. No Chrome e no Edge, a sala usa o reconhecimento de voz do navegador em português (`pt-BR`), fecha lotes após uma pausa curta ou 12 palavras, pede ao agente as glosas compatíveis com o dataset e as envia sequencialmente ao avatar. Pagamento e transmissão externa ainda estão representados visualmente nesta etapa.
+O widget do avatar está conectado por `iframe` e `postMessage`. A sala prefere o reconhecimento de voz nativo em português (`pt-BR`); quando ele não existe ou o serviço é bloqueado — cenário comum no Brave — o navegador grava pequenos trechos e o backend os transcreve sem expor a chave da API. Cada lote fecha após uma pausa curta ou 12 palavras, pede ao agente glosas compatíveis com o dataset e segue para o avatar. O loop reaproveita a pose já carregada no próprio widget, sem criar outra tarefa na API. Salas abandonadas são encerradas automaticamente pelo heartbeat e pelo processo de expiração do backend.
 
 ## Desenvolvimento
 
@@ -42,7 +42,7 @@ Crie um `.env` a partir do exemplo e preencha as chaves somente no arquivo local
 cp .env.example .env
 ```
 
-As integrações do backend usam `NEOTALK_API_KEY`, `NEOTALK_API_BASE_URL`, `OPENAI_API_KEY` e `OPENAI_MODEL`. Nenhuma dessas chaves é enviada ao navegador ou versionada. As rotas de vídeo também podem ser trocadas por ambiente com `NEOTALK_VIDEO_SUBMIT_PATH` e `NEOTALK_VIDEO_STATUS_PATH`.
+As integrações do backend usam `NEOTALK_API_KEY`, `NEOTALK_API_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` e `OPENAI_TRANSCRIBE_MODEL`. Nenhuma dessas chaves é enviada ao navegador ou versionada. As rotas de vídeo também podem ser trocadas por ambiente com `NEOTALK_VIDEO_SUBMIT_PATH` e `NEOTALK_VIDEO_STATUS_PATH`.
 
 Para construir e iniciar o protótipo na porta 3000:
 

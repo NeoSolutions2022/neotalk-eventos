@@ -33,6 +33,7 @@ NEOTALK_VIDEO_STATUS_PATH = _video_path(
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2500"))
 OPENAI_RETRY_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_RETRY_MAX_OUTPUT_TOKENS", "5000"))
 OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "minimal").strip().lower()
@@ -64,9 +65,34 @@ def integration_status() -> dict:
         "neotalk_configured": bool(NEOTALK_API_KEY and NEOTALK_API_BASE_URL),
         "openai_configured": bool(OPENAI_API_KEY),
         "openai_model": OPENAI_MODEL,
+        "openai_transcribe_model": OPENAI_TRANSCRIBE_MODEL,
         "agent_context_cache_ttl_seconds": AGENT_CONTEXT_CACHE_TTL_SECONDS,
         "video_submit_path": NEOTALK_VIDEO_SUBMIT_PATH,
     }
+
+
+async def transcribe_audio(content: bytes, content_type: str) -> str:
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail="Transcrição alternativa indisponível.")
+    if not content:
+        raise HTTPException(status_code=422, detail="O trecho de áudio está vazio.")
+    extension = "ogg" if "ogg" in content_type else "mp4" if "mp4" in content_type else "webm"
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            response = await client.post(
+                f"{OPENAI_BASE_URL}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                data={"model": OPENAI_TRANSCRIBE_MODEL, "language": "pt", "response_format": "json"},
+                files={"file": (f"trecho.{extension}", content, content_type)},
+            )
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="Não foi possível transcrever este trecho.")
+        text = str(response.json().get("text", "")).strip()
+        return " ".join(text.split())
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="O serviço de transcrição não respondeu.") from exc
 
 
 def _neotalk_headers() -> dict[str, str]:

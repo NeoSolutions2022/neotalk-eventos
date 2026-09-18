@@ -60,6 +60,10 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /interruptIdleLoopForSpeech/);
   assert.match(liveRoom, /recognitionWatchdogRef/);
   assert.match(liveRoom, /recognition\.abort\(\)/);
+  assert.match(liveRoom, /MediaRecorder/);
+  assert.match(liveRoom, /\/agent\/transcribe/);
+  assert.match(liveRoom, /\/heartbeat/);
+  assert.match(liveRoom, /neotalk:replay/);
   assert.match(liveRoom, /retryUnprocessable/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
   assert.match(liveRoom, /toggleMicrophone/);
@@ -89,6 +93,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms"/);
+  assert.match(api, /@app\.post\("\/api\/v1\/agent\/transcribe"/);
+  assert.match(api, /@app\.post\("\/api\/v1\/rooms\/\{room_id\}\/heartbeat"/);
   assert.match(api, /@app\.patch\("\/api\/v1\/batches\/\{batch_id\}"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/quality-runs"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/dataset\/sync"/);

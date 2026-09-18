@@ -99,6 +99,38 @@ class FakeAsyncClient:
         return self.responses.pop(0)
 
 
+class FakeTranscriptionClient:
+    def __init__(self) -> None:
+        self.kwargs: dict = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback) -> None:
+        return None
+
+    async def post(self, _url: str, **kwargs) -> FakeResponse:
+        self.kwargs = kwargs
+        return FakeResponse({"text": "  olá   mundo  "})
+
+
+class TranscribeAudioTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sends_browser_audio_and_normalizes_transcript(self) -> None:
+        client = FakeTranscriptionClient()
+
+        with (
+            patch.object(services, "OPENAI_API_KEY", "test-key"),
+            patch.object(services, "OPENAI_TRANSCRIBE_MODEL", "test-transcribe"),
+            patch.object(services.httpx, "AsyncClient", return_value=client),
+        ):
+            result = await services.transcribe_audio(b"audio", "audio/ogg")
+
+        self.assertEqual(result, "olá mundo")
+        self.assertEqual(client.kwargs["data"]["model"], "test-transcribe")
+        self.assertEqual(client.kwargs["files"]["file"][0], "trecho.ogg")
+        self.assertEqual(client.kwargs["headers"]["Authorization"], "Bearer test-key")
+
+
 class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         services.invalidate_agent_context_cache()

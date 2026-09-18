@@ -7,7 +7,7 @@ import asyncpg
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database import get_pool, lifespan
+from .database import expire_stale_rooms, get_pool, lifespan
 from .auth import (
     COOKIE_NAME, CurrentUser, admin_csrf, admin_user, create_session, csrf_user,
     current_user, enforce_rate_limit, hash_password, normalize_email, token_hash, user_payload, verify_password,
@@ -37,9 +37,9 @@ from .services import (
     invalidate_agent_context_cache,
     submit_video,
     sync_pose_words,
+    transcribe_audio,
     translate_to_glosses,
 )
-
 
 def record_dict(record: asyncpg.Record) -> dict:
     return dict(record)
@@ -333,6 +333,17 @@ async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depend
     return result
 
 
+@app.post("/api/v1/agent/transcribe")
+async def agent_transcribe(request: Request, _: CurrentUser = Depends(csrf_user)) -> dict:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type not in {"audio/webm", "audio/ogg", "audio/mp4"}:
+        raise HTTPException(status_code=415, detail="Formato de áudio não suportado.")
+    content = await request.body()
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Trecho de áudio muito grande.")
+    return {"text": await transcribe_audio(content, content_type)}
+
+
 @app.post("/api/v1/admin/quality-runs", status_code=status.HTTP_201_CREATED)
 async def create_quality_run(payload: QualityRunCreate, pool: asyncpg.Pool = Depends(get_pool), _: CurrentUser = Depends(admin_csrf)) -> dict:
     translation = await translate_to_glosses(pool, payload.text)
@@ -415,6 +426,7 @@ async def rate_quality_run(run_id: UUID, payload: QualityRatingCreate, pool: asy
 
 @app.post("/api/v1/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
 async def create_room(payload: RoomCreate, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
+    await expire_stale_rooms(pool, user.id)
     async with pool.acquire() as connection:
         async with connection.transaction():
             await connection.fetchval("SELECT id FROM users WHERE id=$1 FOR UPDATE", user.id)
@@ -432,6 +444,7 @@ async def create_room(payload: RoomCreate, pool: asyncpg.Pool = Depends(get_pool
 
 @app.get("/api/v1/rooms", response_model=list[RoomOut])
 async def list_rooms(limit: int = 50, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(current_user)) -> list[dict]:
+    await expire_stale_rooms(pool, None if user.role == "admin" else user.id)
     safe_limit = min(max(limit, 1), 100)
     rows = await pool.fetch(
         """
@@ -504,6 +517,18 @@ async def finish_room(room_id: UUID, payload: RoomFinish, pool: asyncpg.Pool = D
     if not row:
         raise HTTPException(status_code=404, detail="Sala não encontrada.")
     return record_dict(row)
+
+
+@app.post("/api/v1/rooms/{room_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+async def heartbeat_room(room_id: UUID, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> Response:
+    result = await pool.execute(
+        """UPDATE rooms SET updated_at=NOW() WHERE id=$1 AND status='live'
+           AND (user_id=$2 OR $3='admin')""",
+        room_id, user.id, user.role,
+    )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=404, detail="Sala ao vivo não encontrada.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/api/v1/rooms/{room_id}/batches", response_model=BatchOut, status_code=status.HTTP_201_CREATED)

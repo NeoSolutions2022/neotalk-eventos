@@ -22,7 +22,7 @@ type SpeechRecognitionLike = {
   onend: (() => void) | null;
 };
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-type AvatarMessage = { type?: string; status?: string; message?: string; words?: unknown[] };
+type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; words?: unknown[]; capabilities?: string[] };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
 type AgentTranslation = { gloss_text: string; prompt_id: string; model: string; agent_latency_ms: number };
@@ -54,17 +54,22 @@ async function retryUnprocessable<T>(request: () => Promise<T>): Promise<T> {
   }
 }
 
-export default function LiveRoom({ recording, setRecording, time, playerMode, setPlayerMode, showToast }: {
+export default function LiveRoom({ recording, setRecording, time, playerMode, setPlayerMode, showToast, diagnostics = false }: {
   recording: boolean;
   setRecording: (value: boolean) => void;
   time: string;
   playerMode: "complete" | "compact";
   setPlayerMode: (value: "complete" | "compact") => void;
   showToast: (value: string) => void;
+  diagnostics?: boolean;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
+  const fallbackStreamRef = useRef<MediaStream | null>(null);
+  const fallbackChunkTimerRef = useRef<number | null>(null);
+  const heartbeatTimerRef = useRef<number | null>(null);
   const restartRecognitionRef = useRef<(delay?: number) => void>(() => undefined);
   const listeningRef = useRef(false);
   const microphoneMutedRef = useRef(false);
@@ -85,6 +90,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const idleLoopIndexRef = useRef(0);
   const lastSpeechAtRef = useRef(0);
   const avatarReadyRef = useRef(false);
+  const avatarSupportsReplayRef = useRef(false);
   const avatarBusyRef = useRef(false);
   const batchIdRef = useRef(0);
   const roomIdRef = useRef<string | null>(null);
@@ -102,6 +108,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const [lastCaption, setLastCaption] = useState("");
   const [microphoneName, setMicrophoneName] = useState("Microfone padrão");
   const [microphoneMuted, setMicrophoneMuted] = useState(false);
+  const [transcriptionEngine, setTranscriptionEngine] = useState<"browser" | "server">("browser");
   const [stageZoom, setStageZoom] = useState(1);
   const [batches, setBatches] = useState<LiveBatch[]>([]);
   const [processedBatches, setProcessedBatches] = useState(0);
@@ -191,8 +198,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     avatarRetryCountRef.current = 0;
     avatarPlaybackStartedRef.current = false;
     setAvatarError("");
-    setAvatarStatus(`Loop de espera · frase ${phraseIndex + 1} de ${recentPhrases.length}`);
-    if (!sendToAvatar({ type: "neotalk:sign", phrase: phrase.glossText || phrase.text })) {
+    setAvatarStatus(`${avatarNames[avatar]} mantendo a tradução ativa`);
+    const loopCommand = avatarSupportsReplayRef.current ? "neotalk:replay" : "neotalk:sign";
+    if (!sendToAvatar({ type: loopCommand, phrase: phrase.glossText || phrase.text })) {
       idleLoopActiveRef.current = false;
       avatarBusyRef.current = false;
     }
@@ -355,7 +363,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
     avatarRetryCountRef.current += 1;
     setAvatarStatus("Reenviando sinais");
-    if (!sendToAvatar({ type: "neotalk:sign", phrase: text })) releaseAvatarAfterRetryFailure();
+    const command = idleLoopActiveRef.current && avatarSupportsReplayRef.current ? "neotalk:replay" : "neotalk:sign";
+    if (!sendToAvatar({ type: command, phrase: text })) releaseAvatarAfterRetryFailure();
     else scheduleAvatarRetry();
   };
 
@@ -403,9 +412,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     const statusLabels: Record<string, string> = {
       loading_avatar: "Carregando avatar 3D",
       ready: "Lia conectada",
-      queued: "Lote recebido",
-      processing: "Preparando sinais",
-      loading_pose: "Carregando movimentos",
+      queued: "Tradução recebida",
+      processing: "Preparando tradução",
+      loading_pose: "Preparando avatar",
       playing: "Lia sinalizando",
     };
 
@@ -415,6 +424,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
       if (data.type === "neotalk:ready") {
         avatarReadyRef.current = true;
+        avatarSupportsReplayRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("replay");
         setAvatarReady(true);
         setAvatarError("");
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
@@ -433,6 +443,10 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
           Math.max(2600, wordCount * 850),
         );
       } else if (data.type === "neotalk:error") {
+        if (data.code === "pose_cache_miss" && idleLoopActiveRef.current) {
+          const phrase = recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1];
+          if (phrase && sendToAvatar({ type: "neotalk:sign", phrase: phrase.glossText || phrase.text })) return;
+        }
         if (isRetryableAvatarError(data.message)) {
           setAvatarError("");
           if (!avatarPlaybackStartedRef.current) scheduleAvatarRetry();
@@ -441,6 +455,12 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         if (isNonBlockingAvatarError(data.message)) {
           setAvatarError("");
           setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
+          return;
+        }
+        if (!diagnostics) {
+          setAvatarError("");
+          setAvatarStatus("Ajustando a tradução");
+          if (!avatarPlaybackStartedRef.current) scheduleAvatarRetry();
           return;
         }
         avatarReadyRef.current = false;
@@ -458,7 +478,57 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [avatar, widgetOrigin]);
+  }, [avatar, diagnostics, showToast, widgetOrigin]);
+
+  const clearFallbackChunkTimer = () => {
+    if (fallbackChunkTimerRef.current) window.clearTimeout(fallbackChunkTimerRef.current);
+    fallbackChunkTimerRef.current = null;
+  };
+
+  const startFallbackChunk = () => {
+    const stream = fallbackStreamRef.current;
+    if (!stream || !listeningRef.current || microphoneMutedRef.current || fallbackRecorderRef.current?.state === "recording") return;
+    const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type)) || "";
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks: BlobPart[] = [];
+    fallbackRecorderRef.current = recorder;
+    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+    recorder.onstop = () => {
+      clearFallbackChunkTimer();
+      fallbackRecorderRef.current = null;
+      const shouldProcess = listeningRef.current && !microphoneMutedRef.current;
+      if (shouldProcess) window.setTimeout(startFallbackChunk, 30);
+      if (!shouldProcess || !chunks.length) return;
+      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      void apiRequest<{ text: string }>("/agent/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": blob.type.split(";", 1)[0] },
+        body: blob,
+      }).then(({ text }) => {
+        if (!text || !listeningRef.current) return;
+        interruptIdleLoopForSpeech();
+        setLastCaption(text);
+        setInterimCaption("");
+        addTranscriptToBuffer(text);
+      }).catch(() => {
+        if (diagnostics) setBackendStatus("Trecho de áudio não transcrito");
+      });
+    };
+    recorder.start();
+    fallbackChunkTimerRef.current = window.setTimeout(() => {
+      if (recorder.state === "recording") recorder.stop();
+    }, 3200);
+  };
+
+  const stopFallbackCapture = (releaseStream = true) => {
+    clearFallbackChunkTimer();
+    try { if (fallbackRecorderRef.current?.state === "recording") fallbackRecorderRef.current.stop(); } catch { /* já encerrado */ }
+    fallbackRecorderRef.current = null;
+    if (releaseStream) {
+      fallbackStreamRef.current?.getTracks().forEach((track) => track.stop());
+      fallbackStreamRef.current = null;
+    }
+  };
 
   const selectAvatar = (value: AvatarId) => {
     setAvatar(value);
@@ -477,6 +547,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     recognitionWatchdogRef.current = null;
     recognitionRef.current?.stop();
     recognitionRef.current = null;
+    stopFallbackCapture();
+    if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
+    heartbeatTimerRef.current = null;
     sendToAvatar({ type: "neotalk:pause" });
     setInterimCaption("");
     flushWordBuffer(true);
@@ -498,17 +571,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const startLiveRoom = async () => {
     const browserWindow = window as Window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor };
     const SpeechRecognitionApi = browserWindow.SpeechRecognition || browserWindow.webkitSpeechRecognition;
-    if (!SpeechRecognitionApi) {
-      showToast("Use Chrome ou Edge para capturar e transcrever o microfone");
-      return;
-    }
-
     let createdRoomId: string | null = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const track = stream.getAudioTracks()[0];
       if (track?.label) setMicrophoneName(track.label);
-      stream.getTracks().forEach((item) => item.stop());
+      if (SpeechRecognitionApi) stream.getTracks().forEach((item) => item.stop());
+      else fallbackStreamRef.current = stream;
 
       setBackendStatus("Criando sala");
       let room: RoomResponse;
@@ -538,10 +607,55 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       lastSpeechAtRef.current = Date.now();
       setBackendStatus("Sala conectada ao histórico");
 
+      if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = window.setInterval(() => {
+        const activeRoomId = roomIdRef.current;
+        if (activeRoomId) void roomApi<void>(`/rooms/${activeRoomId}/heartbeat`, { method: "POST" }).catch(() => undefined);
+      }, 25000);
+
+      if (!SpeechRecognitionApi) {
+        listeningRef.current = true;
+        microphoneMutedRef.current = false;
+        setMicrophoneMuted(false);
+        setTranscriptionEngine("server");
+        setRecording(true);
+        startFallbackChunk();
+        showToast("Sala iniciada com transcrição compatível com este navegador");
+        return;
+      }
+
       const recognition = new SpeechRecognitionApi();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = "pt-BR";
+      const activateServerFallback = async () => {
+        if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
+        if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
+        recognitionWatchdogRef.current = null;
+        recognition.onerror = null;
+        recognition.onend = null;
+        try { recognition.abort(); } catch { /* reconhecimento já encerrado */ }
+        recognitionRef.current = null;
+        try {
+          const compatibleStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const compatibleTrack = compatibleStream.getAudioTracks()[0];
+          if (compatibleTrack?.label) setMicrophoneName(compatibleTrack.label);
+          stopFallbackCapture();
+          fallbackStreamRef.current = compatibleStream;
+          listeningRef.current = true;
+          microphoneMutedRef.current = false;
+          setMicrophoneMuted(false);
+          setTranscriptionEngine("server");
+          setRecording(true);
+          setAvatarStatus("Microfone conectado em modo compatível");
+          startFallbackChunk();
+          showToast("Ativamos o modo compatível de transcrição para este navegador");
+        } catch {
+          listeningRef.current = false;
+          setRecording(false);
+          showToast("Não foi possível acessar o microfone. Revise a permissão do navegador.");
+        }
+      };
       const restartRecognition = (delay = 350) => {
         if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
         restartTimerRef.current = window.setTimeout(() => {
@@ -572,7 +686,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         setInterimCaption(interim.trim());
       };
       recognition.onerror = (event) => {
-        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        if (event.error === "service-not-allowed" || event.error === "network") {
+          void activateServerFallback();
+        } else if (event.error === "not-allowed") {
           listeningRef.current = false;
           if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
           if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
@@ -580,7 +696,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
           setRecording(false);
           showToast("Permita o acesso ao microfone para iniciar a sala");
         } else if (event.error !== "no-speech" && event.error !== "aborted") {
-          showToast("A captura de voz foi interrompida");
+          void activateServerFallback();
         }
       };
       recognition.onend = () => {
@@ -595,6 +711,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       microphoneMutedRef.current = false;
       setMicrophoneMuted(false);
       setRecording(true);
+      setTranscriptionEngine("browser");
       recognitionActivityAtRef.current = Date.now();
       if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
       recognitionWatchdogRef.current = window.setInterval(() => {
@@ -612,6 +729,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     } catch {
       listeningRef.current = false;
       setRecording(false);
+      stopFallbackCapture();
       if (createdRoomId) {
         roomIdRef.current = null;
         roomStartedAtRef.current = null;
@@ -639,11 +757,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       setInterimCaption("");
       flushWordBuffer(true);
       try { recognitionRef.current?.abort(); } catch { /* reconhecimento já encerrado */ }
+      if (transcriptionEngine === "server") stopFallbackCapture(false);
       setAvatarStatus(idleLoopActiveRef.current ? "Microfone mutado · loop ativo" : `${avatarNames[avatar]} aguardando em loop`);
       scheduleIdleLoop(0);
     } else {
       recognitionActivityAtRef.current = Date.now();
-      restartRecognitionRef.current(0);
+      if (transcriptionEngine === "server") startFallbackChunk();
+      else restartRecognitionRef.current(0);
       setAvatarStatus("Microfone reativado");
     }
   };
@@ -661,6 +781,17 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
     if (idleLoopTimerRef.current) window.clearTimeout(idleLoopTimerRef.current);
     if (avatarRetryTimerRef.current) window.clearTimeout(avatarRetryTimerRef.current);
+    if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
+    stopFallbackCapture();
+    const roomId = roomIdRef.current;
+    const startedAt = roomStartedAtRef.current;
+    if (roomId) {
+      void roomApi(`/rooms/${roomId}/finish`, {
+        method: "POST",
+        keepalive: true,
+        body: JSON.stringify({ duration_seconds: startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0 }),
+      }).catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
@@ -695,12 +826,12 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
           <span className="stage-language">PT → LIBRAS</span>
           {avatarError && <div className="avatar-error">{avatarError}</div>}
         </div>
-        <div className="capture-controls"><div className={`audio-source ${recording && !microphoneMuted ? "listening" : ""} ${microphoneMuted ? "muted" : ""}`}><span>{microphoneMuted ? "×" : "⌁"}</span><div><small>{microphoneMuted ? "MICROFONE MUTADO" : recording ? "MICROFONE CAPTURANDO" : "ENTRADA DE ÁUDIO"}</small><b>{microphoneName}</b></div><span className="audio-level" aria-hidden="true"><i/><i/><i/><i/></span></div>{recording && <button className={`mute-button ${microphoneMuted ? "active" : ""}`} onClick={toggleMicrophone}>{microphoneMuted ? "Ativar microfone" : "Mutar microfone"}</button>}<button className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{recording ? "Encerrar sala" : "Iniciar sala ao vivo"}</button></div>
+        <div className="capture-controls"><div className={`audio-source ${recording && !microphoneMuted ? "listening" : ""} ${microphoneMuted ? "muted" : ""}`}><span>{microphoneMuted ? "×" : "⌁"}</span><div><small>{microphoneMuted ? "MICROFONE MUTADO" : recording ? `MICROFONE CAPTURANDO · ${transcriptionEngine === "server" ? "MODO COMPATÍVEL" : "TEMPO REAL"}` : "ENTRADA DE ÁUDIO"}</small><b>{microphoneName}</b></div><span className="audio-level" aria-hidden="true"><i/><i/><i/><i/></span></div>{recording && <button className={`mute-button ${microphoneMuted ? "active" : ""}`} onClick={toggleMicrophone}>{microphoneMuted ? "Ativar microfone" : "Mutar microfone"}</button>}<button className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{recording ? "Encerrar sala" : "Iniciar sala ao vivo"}</button></div>
       </section>
       <aside className="studio-panel">
         <div className="panel-tabs"><button className="active">Sala</button><button>Legenda</button></div>
         <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option><option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
-        <div className="config-block live-queue"><div className="block-title"><b>Fila de tradução</b><small>Frases contínuas · loop das 2 últimas na pausa · {processedBatches} concluídos</small><span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span></div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "playing" ? "LIA" : batch.status === "translating" ? "GPT" : batch.status === "ready" ? "PRONTO" : "FILA"}</span><p>{batch.text}{batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
+        <div className="config-block live-queue"><div className="block-title"><b>Tradução ao vivo</b><small>Trechos contínuos · últimas frases mantêm o avatar ativo · {processedBatches} concluídos</small>{diagnostics && <span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span>}</div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "playing" ? "AGORA" : batch.status === "ready" ? "A SEGUIR" : "PREPARANDO"}</span><p>{batch.text}{diagnostics && batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
         <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
         <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Abra o avatar em uma saída separada.</small></div><button className="output-button" onClick={() => { window.open(widgetUrl, "_blank", "noopener,noreferrer"); showToast("Player aberto em nova janela"); }}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div>
       </aside>

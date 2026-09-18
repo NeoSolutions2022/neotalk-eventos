@@ -246,8 +246,15 @@ Mensagens de login e recuperação não devem revelar se determinado e-mail exis
 - `GET /api/v1/rooms/{id}`: exige propriedade ou papel admin;
 - `POST /api/v1/rooms/{id}/start`: exige propriedade e aplica limite de concorrência;
 - `POST /api/v1/rooms/{id}/finish`: exige propriedade;
+- `POST /api/v1/rooms/{id}/heartbeat`: renova a atividade durante a transmissão;
 - `POST /api/v1/rooms/{id}/batches`: exige propriedade;
 - `PATCH /api/v1/batches/{id}`: exige propriedade por meio da sala.
+
+Uma sala `live` sem heartbeat por dois minutos e uma sala `ready` abandonada por quinze minutos são finalizadas automaticamente. O processo roda em segundo plano e também antes das operações de criação e listagem, evitando salas-fantasma após fechamento de aba, queda de rede ou travamento do navegador.
+
+### Compatibilidade do microfone
+
+O cliente prefere a API nativa de reconhecimento de fala. Se ela não estiver disponível ou retornar indisponibilidade de serviço/rede, a sala alterna automaticamente para captura com `MediaRecorder` e envia trechos curtos autenticados para `POST /api/v1/agent/transcribe`. Áudio bruto não é persistido, detalhes técnicos ficam restritos ao modo administrativo e uma falha isolada não encerra a transmissão.
 
 O endpoint `/api/v1/agent/translate` também deverá exigir sessão e validar que `batch_id`, quando informado, pertence ao usuário atual.
 

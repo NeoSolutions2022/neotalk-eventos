@@ -139,11 +139,11 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
         </header>
         <div className="content">
           {view === "dashboard" && <Dashboard onCreate={() => goTo("studio")} onViewAll={() => goTo("instances")} />}
-          {view === "instances" && <Rooms onCreate={() => goTo("studio")} />}
+          {view === "instances" && <Rooms onCreate={() => goTo("studio")} diagnostics={user.role === "admin"} />}
           {view === "packages" && <Packages onBuy={() => goTo("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
           {view === "quality" && <QualityAdmin showToast={showToast} />}
-          {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} />}
+          {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} diagnostics={user.role === "admin"} />}
           {(view === "videos" || view === "plugins") && <LockedPreview kind={view} />}
           {view === "account" && <Account user={user} onReplay={async () => {
             await apiRequest("/auth/onboarding", { method: "PATCH", body: JSON.stringify({ step: 0, status: "pending" }) });
