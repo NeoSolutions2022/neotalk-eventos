@@ -321,14 +321,14 @@ function Billing({ onSave }: { onSave: () => void }) {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function Studio({ recording, setRecording, time, playerMode, setPlayerMode, showToast }: { recording: boolean; setRecording: (value: boolean) => void; time: string; playerMode: "complete" | "compact"; setPlayerMode: (value: "complete" | "compact") => void; showToast: (value: string) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [avatar, setAvatar] = useState<AvatarId>("lia");
+  const [avatar, setAvatar] = useState<AvatarId>("elia");
   const [avatarReady, setAvatarReady] = useState(false);
   const [avatarStatus, setAvatarStatus] = useState("Conectando ao avatar");
   const [avatarError, setAvatarError] = useState("");
   const [phrase, setPhrase] = useState("É uma satisfação receber todos vocês. Hoje vamos falar sobre acessibilidade.");
   const [widgetUrl] = useState(() => {
     const url = new URL(avatarWidgetBase);
-    url.searchParams.set("avatar", "lia");
+    url.searchParams.set("avatar", "elia");
     url.searchParams.set("loop", "1");
     url.searchParams.set("background", "#10233f");
     return url.toString();

@@ -79,11 +79,13 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /\/agent\/translate/);
   assert.match(liveRoom, /agent\.gloss_text/);
   assert.match(liveRoom, /option value="elia">Elia · NeoTalk/);
+  assert.match(liveRoom, /useState<AvatarId>\("elia"\)/);
   assert.match(quality, /\/admin\/quality-runs/);
   assert.match(quality, /neotalk:sign/);
   assert.match(quality, /neotalk:set-avatar/);
   assert.match(quality, /option value="asuna">Asuna/);
   assert.match(quality, /option value="elia">Elia/);
+  assert.match(quality, /avatar=elia/);
   assert.match(quality, /avatarLoopTimerRef/);
   assert.match(quality, /sinalizando em loop/);
   assert.match(quality, /controls autoPlay loop/);

@@ -103,9 +103,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const agentResultsRef = useRef(new Map<number, AgentTranslation>());
   const agentPromisesRef = useRef(new Map<number, Promise<void>>());
 
-  const [avatar, setAvatar] = useState<AvatarId>("lia");
+  const [avatar, setAvatar] = useState<AvatarId>("elia");
   const [avatarReady, setAvatarReady] = useState(false);
-  const [avatarStatus, setAvatarStatus] = useState("Conectando à Lia");
+  const [avatarStatus, setAvatarStatus] = useState("Conectando à Elia");
   const [avatarError, setAvatarError] = useState("");
   const [interimCaption, setInterimCaption] = useState("");
   const [lastCaption, setLastCaption] = useState("");
@@ -121,7 +121,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const [cameraGuideOpen, setCameraGuideOpen] = useState(false);
   const [widgetUrl] = useState(() => {
     const url = new URL(avatarWidgetBase);
-    url.searchParams.set("avatar", "lia");
+    url.searchParams.set("avatar", "elia");
     url.searchParams.set("loop", "0");
     url.searchParams.set("background", "#10233f");
     return url.toString();
@@ -260,7 +260,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     avatarPlaybackStartedRef.current = false;
     refreshBatchView();
     setAvatarError("");
-    setAvatarStatus("Enviando glosas para a Lia");
+    setAvatarStatus(`Enviando glosas para ${avatarNames[avatar]}`);
     if (!sendToAvatar({ type: "neotalk:sign", phrase: next.glossText })) {
       next.status = "ready";
       pendingBatchesRef.current.unshift(next);

@@ -46,10 +46,10 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [avatarReady, setAvatarReady] = useState(false);
-  const [avatar, setAvatar] = useState<AvatarId>("lia");
+  const [avatar, setAvatar] = useState<AvatarId>("elia");
   const [avatarStatus, setAvatarStatus] = useState("Carregando avatar");
   const [rating, setRating] = useState(0);
-  const widgetUrl = `${widgetBase}?avatar=lia&loop=0&background=%2310233f`;
+  const widgetUrl = `${widgetBase}?avatar=elia&loop=0&background=%2310233f`;
   const widgetOrigin = new URL(widgetBase).origin;
 
   useEffect(() => {
