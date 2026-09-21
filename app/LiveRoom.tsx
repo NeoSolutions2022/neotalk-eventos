@@ -37,7 +37,7 @@ const LIVE_AGENT_CONCURRENCY = 2;
 const LIVE_IDLE_LOOP_DELAY_MS = 2200;
 const LIVE_IDLE_LOOP_GAP_MS = 320;
 const LIVE_API_RETRY_DELAYS_MS = [350, 800];
-const LIVE_AVATAR_RETRY_DELAY_MS = 900;
+const LIVE_AVATAR_RETRY_DELAY_MS = 2500;
 const LIVE_AVATAR_MAX_RETRIES = 2;
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -84,6 +84,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const idleLoopTimerRef = useRef<number | null>(null);
   const avatarRetryTimerRef = useRef<number | null>(null);
   const avatarRetryCountRef = useRef(0);
+  const avatarCommandAcknowledgedRef = useRef(false);
   const avatarPlaybackStartedRef = useRef(false);
   const wordBufferRef = useRef<string[]>([]);
   const pendingBatchesRef = useRef<LiveBatch[]>([]);
@@ -201,6 +202,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     idleLoopActiveRef.current = true;
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
+    avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     setAvatarError("");
     setAvatarStatus(`${avatarNames[avatar]} mantendo a tradução ativa`);
@@ -208,12 +210,14 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     if (!sendToAvatar({ type: loopCommand, phrase: phrase.glossText || phrase.text })) {
       idleLoopActiveRef.current = false;
       avatarBusyRef.current = false;
-    }
+    } else scheduleAvatarRetry();
   };
 
   const scheduleIdleLoop = (minimumDelay = LIVE_IDLE_LOOP_DELAY_MS) => {
     clearIdleLoopTimer();
     if (!listeningRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length || !recentPhrasesRef.current.length) return;
+    // Executado apenas pelo timer/evento de reprodução, nunca durante o render.
+    // eslint-disable-next-line react-hooks/purity
     const silenceRemaining = Math.max(0, LIVE_IDLE_LOOP_DELAY_MS - (Date.now() - lastSpeechAtRef.current));
     idleLoopTimerRef.current = window.setTimeout(playIdleLoopPhrase, Math.max(minimumDelay, silenceRemaining));
   };
@@ -227,10 +231,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   };
 
   const interruptIdleLoopForSpeech = () => {
+    // Executado apenas em resposta à captura de fala.
+    // eslint-disable-next-line react-hooks/purity
     lastSpeechAtRef.current = Date.now();
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
     avatarRetryCountRef.current = 0;
+    avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     if (idleLoopActiveRef.current) {
       if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
@@ -257,6 +264,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     activeBatchRef.current = next;
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
+    avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     refreshBatchView();
     setAvatarError("");
@@ -267,7 +275,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       activeBatchRef.current = null;
       avatarBusyRef.current = false;
       refreshBatchView();
-    }
+    } else scheduleAvatarRetry();
   };
 
   const translateBatch = (batch: LiveBatch) => {
@@ -319,6 +327,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
     activeBatchRef.current = null;
     avatarBusyRef.current = false;
+    avatarCommandAcknowledgedRef.current = false;
     refreshBatchView();
     if (status === "done") {
       window.setTimeout(() => {
@@ -331,6 +340,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const releaseAvatarAfterRetryFailure = () => {
     clearAvatarRetryTimer();
     avatarRetryCountRef.current = 0;
+    avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     if (idleLoopActiveRef.current) {
       idleLoopActiveRef.current = false;
@@ -353,7 +363,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   };
 
   const retryCurrentAvatarPhrase = () => {
-    if (avatarPlaybackStartedRef.current) return;
+    if (avatarPlaybackStartedRef.current || avatarCommandAcknowledgedRef.current) return;
     if (avatarRetryCountRef.current >= LIVE_AVATAR_MAX_RETRIES) {
       releaseAvatarAfterRetryFailure();
       return;
@@ -367,6 +377,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       return;
     }
     avatarRetryCountRef.current += 1;
+    avatarCommandAcknowledgedRef.current = false;
     setAvatarStatus("Reenviando sinais");
     const command = idleLoopActiveRef.current && avatarSupportsReplayRef.current ? "neotalk:replay" : "neotalk:sign";
     if (!sendToAvatar({ type: command, phrase: text })) releaseAvatarAfterRetryFailure();
@@ -375,7 +386,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
   const scheduleAvatarRetry = () => {
     clearAvatarRetryTimer();
-    if (avatarPlaybackStartedRef.current) return;
+    if (avatarPlaybackStartedRef.current || avatarCommandAcknowledgedRef.current) return;
     avatarRetryTimerRef.current = window.setTimeout(retryCurrentAvatarPhrase, LIVE_AVATAR_RETRY_DELAY_MS);
   };
 
@@ -435,10 +446,16 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
         window.setTimeout(dispatchNextBatch, 100);
       } else if (data.type === "neotalk:status" && data.status) {
+        if (avatarBusyRef.current && ["queued", "processing", "loading_pose"].includes(data.status)) {
+          avatarCommandAcknowledgedRef.current = true;
+          clearAvatarRetryTimer();
+          avatarRetryCountRef.current = 0;
+        }
         setAvatarStatus(statusLabels[data.status] || data.status);
       } else if (data.type === "neotalk:playing") {
         clearAvatarRetryTimer();
         avatarRetryCountRef.current = 0;
+        avatarCommandAcknowledgedRef.current = true;
         avatarPlaybackStartedRef.current = true;
         setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
         const wordCount = Array.isArray(data.words) ? data.words.length : 4;
@@ -454,6 +471,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         }
         if (isRetryableAvatarError(data.message)) {
           setAvatarError("");
+          avatarCommandAcknowledgedRef.current = false;
           if (!avatarPlaybackStartedRef.current) scheduleAvatarRetry();
           return;
         }

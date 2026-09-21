@@ -217,8 +217,8 @@ async def update_onboarding(
 ) -> dict:
     version = 1 if payload.status in {"completed", "skipped"} else 0
     row = await pool.fetchrow(
-        """UPDATE users SET onboarding_version=$2,onboarding_step=$3,onboarding_status=$4,
-           onboarding_completed_at=CASE WHEN $4 IN ('completed','skipped') THEN NOW() ELSE NULL END,
+        """UPDATE users SET onboarding_version=$2,onboarding_step=$3,onboarding_status=$4::TEXT,
+           onboarding_completed_at=CASE WHEN $4::TEXT IN ('completed','skipped') THEN NOW() ELSE NULL END,
            updated_at=NOW() WHERE id=$1
            RETURNING onboarding_version,onboarding_step,onboarding_status""",
         user.id, version, payload.step, payload.status,

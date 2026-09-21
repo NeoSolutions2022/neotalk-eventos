@@ -36,7 +36,7 @@ test("serves every primary product route directly", async () => {
 });
 
 test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
-  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth] = await Promise.all([
+  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth, proxy] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/QualityAdmin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/Rooms.tsx", import.meta.url), "utf8"),
@@ -46,6 +46,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
     readFile(new URL("../app/avatarMessages.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/apiClient.ts", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/auth.py", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v1/[...path]/route.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
@@ -70,6 +71,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /mountStageInWindow/);
   assert.match(liveRoom, /retryUnprocessable/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
+  assert.match(liveRoom, /avatarCommandAcknowledgedRef/);
+  assert.match(liveRoom, /else scheduleAvatarRetry\(\)/);
   assert.match(liveRoom, /toggleMicrophone/);
   assert.match(liveRoom, /Microfone mutado · mantendo a tradução em loop/);
   assert.match(liveRoom, /--stage-zoom/);
@@ -96,11 +99,14 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(rooms, /apiRequest<Room\[]>\("\/rooms"\)/);
   assert.match(apiClient, /credentials: "include"/);
   assert.match(apiClient, /X-CSRF-Token/);
+  assert.match(proxy, /\[204, 205, 304\]\.includes\(upstream\.status\)/);
+  assert.match(proxy, /bodyless \? null/);
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /container_name: neotalk-api/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms"/);
   assert.match(api, /@app\.post\("\/api\/v1\/agent\/transcribe"/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms\/\{room_id\}\/heartbeat"/);
+  assert.match(api, /\$4::TEXT IN \('completed','skipped'\)/);
   assert.match(api, /@app\.patch\("\/api\/v1\/batches\/\{batch_id\}"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/quality-runs"/);
   assert.match(api, /@app\.post\("\/api\/v1\/admin\/dataset\/sync"/);

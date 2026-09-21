@@ -40,7 +40,8 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
   upstream.headers.forEach((value, key) => {
     if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) responseHeaders.append(key, value);
   });
-  return new Response(await upstream.arrayBuffer(), {
+  const bodyless = request.method === "HEAD" || [204, 205, 304].includes(upstream.status);
+  return new Response(bodyless ? null : await upstream.arrayBuffer(), {
     status: upstream.status,
     headers: responseHeaders,
   });
