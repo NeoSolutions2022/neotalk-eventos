@@ -17,9 +17,11 @@ A especificação funcional e de segurança para transformar o protótipo em uma
 - Laboratório administrativo para versionar prompts, consultar o dataset e comparar vídeo e avatar lado a lado
 - Envio automático das glosas validadas para a fila da Lia
 - Backend FastAPI e PostgreSQL para persistir salas, duração, transcrições e estado dos lotes
-- Opções visuais para abrir ou compartilhar o player
+- Mini-player com avatar e legendas em Picture-in-Picture ou janela separada redimensionável
 
 O widget do avatar está conectado por `iframe` e `postMessage`. A sala prefere o reconhecimento de voz nativo em português (`pt-BR`); quando ele não existe ou o serviço é bloqueado — cenário comum no Brave — o navegador grava pequenos trechos e o backend os transcreve sem expor a chave da API. Cada lote fecha após uma pausa curta ou 12 palavras, pede ao agente glosas compatíveis com o dataset e segue para o avatar. O loop reaproveita a pose já carregada no próprio widget, sem criar outra tarefa na API. Salas abandonadas são encerradas automaticamente pelo heartbeat e pelo processo de expiração do backend.
+
+Na sala ao vivo, **Mini-player flutuante** usa Document Picture-in-Picture nos navegadores compatíveis e cai automaticamente para uma janela separada quando necessário. A saída é redimensionável e move o player existente, preservando avatar, legenda, zoom e estado da tradução sem iniciar outro widget. Para usar como câmera no Meet ou Zoom, capture a janela `NeoTalk · Tradução em Libras` no OBS, inicie a câmera virtual e selecione `OBS Virtual Camera` no aplicativo de reunião. Navegadores não podem se registrar diretamente como uma câmera do sistema.
 
 ## Desenvolvimento
 

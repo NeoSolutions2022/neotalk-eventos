@@ -64,6 +64,10 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /\/agent\/transcribe/);
   assert.match(liveRoom, /\/heartbeat/);
   assert.match(liveRoom, /neotalk:replay/);
+  assert.match(liveRoom, /documentPictureInPicture/);
+  assert.match(liveRoom, /neotalk-live-output/);
+  assert.match(liveRoom, /OBS Virtual Camera/);
+  assert.match(liveRoom, /mountStageInWindow/);
   assert.match(liveRoom, /retryUnprocessable/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
   assert.match(liveRoom, /toggleMicrophone/);

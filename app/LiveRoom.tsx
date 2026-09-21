@@ -22,6 +22,7 @@ type SpeechRecognitionLike = {
   onend: (() => void) | null;
 };
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number; height?: number }) => Promise<Window> };
 type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; words?: unknown[]; capabilities?: string[] };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
@@ -65,6 +66,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const externalWindowRef = useRef<Window | null>(null);
+  const stageHomeRef = useRef<{ parent: Node; marker: HTMLElement } | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
   const fallbackStreamRef = useRef<MediaStream | null>(null);
@@ -114,6 +117,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const [processedBatches, setProcessedBatches] = useState(0);
   const [roomName, setRoomName] = useState("Evento institucional 2026");
   const [backendStatus, setBackendStatus] = useState("Verificando histórico");
+  const [externalPlayerMode, setExternalPlayerMode] = useState<"pip" | "window" | null>(null);
+  const [cameraGuideOpen, setCameraGuideOpen] = useState(false);
   const [widgetUrl] = useState(() => {
     const url = new URL(avatarWidgetBase);
     url.searchParams.set("avatar", "lia");
@@ -782,6 +787,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     if (idleLoopTimerRef.current) window.clearTimeout(idleLoopTimerRef.current);
     if (avatarRetryTimerRef.current) window.clearTimeout(avatarRetryTimerRef.current);
     if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
+    const outputWindow = externalWindowRef.current;
+    const stage = stageRef.current;
+    const home = stageHomeRef.current;
+    if (stage && home?.parent.isConnected && home.marker.parentNode === home.parent) home.parent.replaceChild(stage, home.marker);
+    externalWindowRef.current = null;
+    stageHomeRef.current = null;
+    if (outputWindow && !outputWindow.closed) outputWindow.close();
     stopFallbackCapture();
     const roomId = roomIdRef.current;
     const startedAt = roomStartedAtRef.current;
@@ -794,6 +806,97 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
   }, []);
 
+  const restoreStage = (sourceWindow?: Window) => {
+    if (sourceWindow && externalWindowRef.current !== sourceWindow) return;
+    const stage = stageRef.current;
+    const home = stageHomeRef.current;
+    if (stage && home?.parent.isConnected && home.marker.parentNode === home.parent) home.parent.replaceChild(stage, home.marker);
+    externalWindowRef.current = null;
+    stageHomeRef.current = null;
+    setExternalPlayerMode(null);
+  };
+
+  const mountStageInWindow = (targetWindow: Window, mode: "pip" | "window") => {
+    const stage = stageRef.current;
+    if (!stage) throw new Error("O player ainda não está pronto.");
+    if (!stageHomeRef.current) {
+      const marker = document.createElement("div");
+      marker.className = "external-player-placeholder";
+      const markerIcon = document.createElement("span");
+      markerIcon.textContent = "▣";
+      const markerTitle = document.createElement("b");
+      markerTitle.textContent = "Saída externa ativa";
+      const markerDescription = document.createElement("small");
+      markerDescription.textContent = "O avatar e as legendas estão na janela separada.";
+      marker.append(markerIcon, markerTitle, markerDescription);
+      const parent = stage.parentNode as Node;
+      parent.insertBefore(marker, stage);
+      stageHomeRef.current = { parent, marker };
+    }
+
+    const targetDocument = targetWindow.document;
+    targetDocument.title = "NeoTalk · Tradução em Libras";
+    targetDocument.documentElement.lang = "pt-BR";
+    targetDocument.head.replaceChildren();
+    document.querySelectorAll<HTMLLinkElement | HTMLStyleElement>('link[rel="stylesheet"], style').forEach((node) => {
+      const clone = node.cloneNode(true) as HTMLLinkElement | HTMLStyleElement;
+      if (node instanceof HTMLLinkElement && clone instanceof HTMLLinkElement) clone.href = node.href;
+      targetDocument.head.appendChild(clone);
+    });
+    const outputStyles = targetDocument.createElement("style");
+    outputStyles.textContent = `
+      html, body, .neotalk-output-shell { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #10233f; }
+      .neotalk-output-shell { display: grid; }
+      .neotalk-output-shell .live-stage { width: 100%; height: 100% !important; min-height: 0; border-radius: 0; }
+      .neotalk-output-shell .exit-fullscreen { display: none !important; }
+    `;
+    targetDocument.head.appendChild(outputStyles);
+    const shell = targetDocument.createElement("main");
+    shell.className = "neotalk-output-shell";
+    targetDocument.body.replaceChildren(shell);
+    shell.appendChild(stage);
+
+    externalWindowRef.current = targetWindow;
+    setExternalPlayerMode(mode);
+    targetWindow.addEventListener("pagehide", () => restoreStage(targetWindow), { once: true });
+    targetWindow.focus();
+  };
+
+  const closeExternalPlayer = () => {
+    const outputWindow = externalWindowRef.current;
+    restoreStage(outputWindow || undefined);
+    if (outputWindow && !outputWindow.closed) outputWindow.close();
+  };
+
+  const openExternalPlayer = async (preference: "pip" | "window") => {
+    const current = externalWindowRef.current;
+    if (current && !current.closed) {
+      current.focus();
+      showToast("O mini-player já está aberto");
+      return;
+    }
+    try {
+      const pipApi = (window as Window & { documentPictureInPicture?: DocumentPictureInPictureApi }).documentPictureInPicture;
+      if (preference === "pip" && pipApi) {
+        try {
+          const pipWindow = await pipApi.requestWindow({ width: 560, height: 420 });
+          mountStageInWindow(pipWindow, "pip");
+          showToast("Mini-player aberto — redimensione pela borda da janela");
+          return;
+        } catch {
+          // O navegador pode expor a API e bloquear o modo flutuante por política.
+          // Nesse caso continuamos automaticamente com uma janela comum.
+        }
+      }
+      const popup = window.open("", "neotalk-live-output", "popup=yes,width=720,height=540,resizable=yes,scrollbars=no");
+      if (!popup) throw new Error("O navegador bloqueou a nova janela.");
+      mountStageInWindow(popup, "window");
+      showToast(preference === "pip" ? "Mini-player aberto em janela compatível" : "Saída aberta em outra janela");
+    } catch (reason) {
+      showToast(reason instanceof Error ? reason.message : "Não foi possível abrir o mini-player");
+    }
+  };
+
   useEffect(() => {
     roomApi<{ status: string }>("/health")
       .then(() => setBackendStatus("Histórico conectado"))
@@ -803,7 +906,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const copyPlayerLink = async () => {
     try {
       await navigator.clipboard.writeText(widgetUrl);
-      showToast("Link do player copiado");
+      showToast("Link direto do avatar copiado — esta saída não inclui as legendas");
     } catch {
       showToast("Não foi possível copiar o link");
     }
@@ -833,7 +936,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option><option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
         <div className="config-block live-queue"><div className="block-title"><b>Tradução ao vivo</b><small>Trechos contínuos · últimas frases mantêm o avatar ativo · {processedBatches} concluídos</small>{diagnostics && <span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span>}</div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "playing" ? "AGORA" : batch.status === "ready" ? "A SEGUIR" : "PREPARANDO"}</span><p>{batch.text}{diagnostics && batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
         <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
-        <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Abra o avatar em uma saída separada.</small></div><button className="output-button" onClick={() => { window.open(widgetUrl, "_blank", "noopener,noreferrer"); showToast("Player aberto em nova janela"); }}><span>↗</span><div><b>Abrir em nova janela</b><small>Ideal para compartilhar uma tela</small></div><i>→</i></button><button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link do player</b><small>Use em OBS, navegador ou telão</small></div><i>→</i></button></div>
+        <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Avatar e legendas continuam sincronizados em qualquer saída.</small></div>{externalPlayerMode ? <button className="output-button active-output" onClick={closeExternalPlayer}><span>×</span><div><b>Fechar saída externa</b><small>{externalPlayerMode === "pip" ? "Mini-player flutuante ativo" : "Janela separada ativa"}</small></div><i>●</i></button> : <><button className="output-button" onClick={() => void openExternalPlayer("pip")}><span>▣</span><div><b>Mini-player flutuante</b><small>Sempre visível e com tamanho ajustável</small></div><i>→</i></button><button className="output-button" onClick={() => void openExternalPlayer("window")}><span>↗</span><div><b>Abrir em outra janela</b><small>Para outra aba, monitor ou captura de janela</small></div><i>→</i></button></>}<button className="output-button" onClick={() => { setCameraGuideOpen((value) => !value); if (!externalPlayerMode) void openExternalPlayer("window"); }}><span>◎</span><div><b>Usar no Meet ou Zoom</b><small>Saída para OBS Virtual Camera</small></div><i>{cameraGuideOpen ? "−" : "+"}</i></button>{cameraGuideOpen && <div className="camera-guide"><b>Transformar em câmera</b><ol><li>No OBS, adicione uma fonte <strong>Captura de janela</strong>.</li><li>Selecione <strong>NeoTalk · Tradução em Libras</strong>.</li><li>Clique em <strong>Iniciar câmera virtual</strong>.</li><li>No Meet ou Zoom, escolha <strong>OBS Virtual Camera</strong>.</li></ol><small>O navegador não pode criar uma câmera do sistema sozinho. Sem OBS, compartilhe a janela NeoTalk como tela.</small></div>}<button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link direto</b><small>Somente avatar, sem as legendas da sala</small></div><i>→</i></button></div>
       </aside>
     </div>
   </>;
