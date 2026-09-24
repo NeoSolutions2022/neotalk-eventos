@@ -65,18 +65,17 @@ async function retryTransientApi<T>(request: () => Promise<T>): Promise<T> {
   }
 }
 
-export default function LiveRoom({ recording, setRecording, time, playerMode, setPlayerMode, showToast, diagnostics = false }: {
+export default function LiveRoom({ recording, setRecording, time, showToast, diagnostics = false }: {
   recording: boolean;
   setRecording: (value: boolean) => void;
   time: string;
-  playerMode: "complete" | "compact";
-  setPlayerMode: (value: "complete" | "compact") => void;
   showToast: (value: string) => void;
   diagnostics?: boolean;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const externalWindowRef = useRef<Window | null>(null);
+  const externalRelayReadyRef = useRef(false);
   const stageHomeRef = useRef<{ parent: Node; marker: HTMLElement } | null>(null);
   const avatarMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -198,6 +197,16 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
   const sendToAvatar = (message: Record<string, unknown>) => {
     if (!avatarReadyRef.current || !frameRef.current?.contentWindow) return false;
+    const externalWindow = externalWindowRef.current;
+    if (externalWindow && !externalWindow.closed) {
+      if (!externalRelayReadyRef.current) return false;
+      externalWindow.postMessage({
+        type: "neotalk:external-player-command",
+        message,
+        widgetOrigin,
+      }, window.location.origin);
+      return true;
+    }
     frameRef.current.contentWindow.postMessage(message, widgetOrigin);
     return true;
   };
@@ -1045,6 +1054,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     const home = stageHomeRef.current;
     if (stage && home?.parent.isConnected && home.marker.parentNode === home.parent) home.parent.replaceChild(stage, home.marker);
     externalWindowRef.current = null;
+    externalRelayReadyRef.current = false;
     stageHomeRef.current = null;
     if (outputWindow && !outputWindow.closed) outputWindow.close();
     stopFallbackCapture();
@@ -1071,23 +1081,9 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     setExternalPlayerMode(null);
   };
 
-  const mountStageInWindow = (targetWindow: Window, mode: "pip" | "window") => {
+  const mountStageInWindow = async (targetWindow: Window, mode: "pip" | "window") => {
     const stage = stageRef.current;
     if (!stage) throw new Error("O player ainda não está pronto.");
-    if (!stageHomeRef.current) {
-      const marker = document.createElement("div");
-      marker.className = "external-player-placeholder";
-      const markerIcon = document.createElement("span");
-      markerIcon.textContent = "▣";
-      const markerTitle = document.createElement("b");
-      markerTitle.textContent = "Saída externa ativa";
-      const markerDescription = document.createElement("small");
-      markerDescription.textContent = "O avatar e as legendas estão na janela separada.";
-      marker.append(markerIcon, markerTitle, markerDescription);
-      const parent = stage.parentNode as Node;
-      parent.insertBefore(marker, stage);
-      stageHomeRef.current = { parent, marker };
-    }
 
     const targetDocument = targetWindow.document;
     const messageHandler = avatarMessageHandlerRef.current;
@@ -1108,12 +1104,39 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       .neotalk-output-shell .exit-fullscreen { display: none !important; }
     `;
     targetDocument.head.appendChild(outputStyles);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const relay = targetDocument.createElement("script");
+        relay.src = new URL("/external-player-relay.js", window.location.origin).toString();
+        relay.onload = () => resolve();
+        relay.onerror = () => reject(new Error("Não foi possível preparar a comunicação do mini-player."));
+        targetDocument.head.appendChild(relay);
+      });
+    } catch (reason) {
+      if (messageHandler) targetWindow.removeEventListener("message", messageHandler);
+      throw reason;
+    }
+    if (!stageHomeRef.current) {
+      const marker = document.createElement("div");
+      marker.className = "external-player-placeholder";
+      const markerIcon = document.createElement("span");
+      markerIcon.textContent = "▣";
+      const markerTitle = document.createElement("b");
+      markerTitle.textContent = "Saída externa ativa";
+      const markerDescription = document.createElement("small");
+      markerDescription.textContent = "O avatar e as legendas estão na janela separada.";
+      marker.append(markerIcon, markerTitle, markerDescription);
+      const parent = stage.parentNode as Node;
+      parent.insertBefore(marker, stage);
+      stageHomeRef.current = { parent, marker };
+    }
     const shell = targetDocument.createElement("main");
     shell.className = "neotalk-output-shell";
     targetDocument.body.replaceChildren(shell);
     shell.appendChild(stage);
 
     externalWindowRef.current = targetWindow;
+    externalRelayReadyRef.current = true;
     setExternalPlayerMode(mode);
     targetWindow.addEventListener("pagehide", () => restoreStage(targetWindow), { once: true });
     targetWindow.focus();
@@ -1135,19 +1158,26 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     try {
       const pipApi = (window as Window & { documentPictureInPicture?: DocumentPictureInPictureApi }).documentPictureInPicture;
       if (preference === "pip" && pipApi) {
+        let pipWindow: Window | null = null;
         try {
-          const pipWindow = await pipApi.requestWindow({ width: 560, height: 420 });
-          mountStageInWindow(pipWindow, "pip");
+          pipWindow = await pipApi.requestWindow({ width: 560, height: 420 });
+          await mountStageInWindow(pipWindow, "pip");
           showToast("Mini-player aberto — redimensione pela borda da janela");
           return;
         } catch {
+          if (pipWindow && !pipWindow.closed) pipWindow.close();
           // O navegador pode expor a API e bloquear o modo flutuante por política.
           // Nesse caso continuamos automaticamente com uma janela comum.
         }
       }
       const popup = window.open("", "neotalk-live-output", "popup=yes,width=720,height=540,resizable=yes,scrollbars=no");
       if (!popup) throw new Error("O navegador bloqueou a nova janela.");
-      mountStageInWindow(popup, "window");
+      try {
+        await mountStageInWindow(popup, "window");
+      } catch (reason) {
+        popup.close();
+        throw reason;
+      }
       showToast(preference === "pip" ? "Mini-player aberto em janela compatível" : "Saída aberta em outra janela");
     } catch (reason) {
       showToast(reason instanceof Error ? reason.message : "Não foi possível abrir o mini-player");
@@ -1177,7 +1207,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     <div className="studio-grid">
       <section className="stage-card">
         <div className="stage-toolbar"><div><span className={recording ? "tag live-tag" : "tag"}>{recording ? "AO VIVO" : "PRÉVIA"}</span><b>Sala · {roomName || "Sem nome"}</b><span className={`avatar-health ${avatarReady ? "connected" : ""}`}><i />{avatarStatus}</span></div><button aria-label="Exibir player e legendas em tela cheia" onClick={() => stageRef.current?.requestFullscreen()}>⛶</button></div>
-        <div ref={stageRef} className={`live-stage ${playerMode}`} style={{ "--stage-zoom": stageZoom } as CSSProperties}>
+        <div ref={stageRef} className="live-stage complete" style={{ "--stage-zoom": stageZoom } as CSSProperties}>
           <iframe ref={frameRef} className="avatar-widget-frame" title="Avatar 3D NeoTalk" src={widgetUrl} allow="fullscreen" />
           <button className="exit-fullscreen" aria-label="Sair da tela cheia" onClick={() => void document.exitFullscreen()}>×</button>
           <div className="fullscreen-zoom" aria-label="Zoom da transmissão"><button aria-label="Diminuir zoom" onClick={() => adjustStageZoom(-0.1)}>−</button><button className="zoom-value" aria-label="Restaurar zoom para 100%" onClick={() => setStageZoom(1)}>{Math.round(stageZoom * 100)}%</button><button aria-label="Aumentar zoom" onClick={() => adjustStageZoom(0.1)}>+</button></div>
@@ -1192,7 +1222,6 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         <div className="panel-tabs"><button className="active">Sala</button><button>Legenda</button></div>
         <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option><option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>
         <div className="config-block live-queue"><div className="block-title"><b>Tradução ao vivo</b><small>Trechos contínuos · últimas frases mantêm o avatar ativo · {processedBatches} concluídos</small>{diagnostics && <span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span>}</div>{batches.length ? <div className="batch-list">{batches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "playing" ? "AGORA" : batch.status === "ready" ? "A SEGUIR" : "PREPARANDO"}</span><p>{batch.text}{diagnostics && batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
-        <div className="config-block"><div className="block-title"><b>Formato do player</b><small>Escolha como exibir a tradução.</small></div><div className="mode-options"><button className={playerMode === "complete" ? "selected" : ""} onClick={() => setPlayerMode("complete")}><i className="layout-complete" />Completo<small>Avatar + legenda</small></button><button className={playerMode === "compact" ? "selected" : ""} onClick={() => setPlayerMode("compact")}><i className="layout-compact" />Mini player<small>Flutuante</small></button></div></div>
         <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Avatar e legendas continuam sincronizados em qualquer saída.</small></div>{externalPlayerMode ? <button className="output-button active-output" onClick={closeExternalPlayer}><span>×</span><div><b>Fechar saída externa</b><small>{externalPlayerMode === "pip" ? "Mini-player flutuante ativo" : "Janela separada ativa"}</small></div><i>●</i></button> : <><button className="output-button" onClick={() => void openExternalPlayer("pip")}><span>▣</span><div><b>Mini-player flutuante</b><small>Sempre visível e com tamanho ajustável</small></div><i>→</i></button><button className="output-button" onClick={() => void openExternalPlayer("window")}><span>↗</span><div><b>Abrir em outra janela</b><small>Para outra aba, monitor ou captura de janela</small></div><i>→</i></button></>}<button className="output-button" onClick={() => { setCameraGuideOpen((value) => !value); if (!externalPlayerMode) void openExternalPlayer("window"); }}><span>◎</span><div><b>Usar no Meet ou Zoom</b><small>Saída para OBS Virtual Camera</small></div><i>{cameraGuideOpen ? "−" : "+"}</i></button>{cameraGuideOpen && <div className="camera-guide"><b>Transformar em câmera</b><ol><li>No OBS, adicione uma fonte <strong>Captura de janela</strong>.</li><li>Selecione <strong>NeoTalk · Tradução em Libras</strong>.</li><li>Clique em <strong>Iniciar câmera virtual</strong>.</li><li>No Meet ou Zoom, escolha <strong>OBS Virtual Camera</strong>.</li></ol><small>O navegador não pode criar uma câmera do sistema sozinho. Sem OBS, compartilhe a janela NeoTalk como tela.</small></div>}<button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link direto</b><small>Somente avatar, sem as legendas da sala</small></div><i>→</i></button></div>
       </aside>
     </div>

@@ -36,7 +36,7 @@ test("serves every primary product route directly", async () => {
 });
 
 test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
-  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth, proxy] = await Promise.all([
+  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth, proxy, externalPlayerRelay] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/QualityAdmin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/Rooms.tsx", import.meta.url), "utf8"),
@@ -47,6 +47,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
     readFile(new URL("../app/apiClient.ts", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/auth.py", import.meta.url), "utf8"),
     readFile(new URL("../app/api/v1/[...path]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../public/external-player-relay.js", import.meta.url), "utf8"),
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
@@ -71,6 +72,10 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /mountStageInWindow/);
   assert.match(liveRoom, /avatarMessageHandlerRef/);
   assert.match(liveRoom, /targetWindow\.addEventListener\("message", messageHandler\)/);
+  assert.match(liveRoom, /neotalk:external-player-command/);
+  assert.match(liveRoom, /external-player-relay\.js/);
+  assert.doesNotMatch(liveRoom, /Formato do player/);
+  assert.match(externalPlayerRelay, /frame\.contentWindow\.postMessage/);
   assert.match(liveRoom, /retryTransientApi/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
   assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 60000/);

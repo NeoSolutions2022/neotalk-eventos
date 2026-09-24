@@ -37,7 +37,6 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const [playerMode, setPlayerMode] = useState<"complete" | "compact">("complete");
   const [toast, setToast] = useState("");
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authLoading, setAuthLoading] = useState(!["login", "register", "handoff"].includes(view));
@@ -143,7 +142,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           {view === "packages" && <Packages onBuy={() => goTo("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
           {view === "quality" && <QualityAdmin showToast={showToast} />}
-          {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} playerMode={playerMode} setPlayerMode={setPlayerMode} showToast={showToast} diagnostics={user.role === "admin"} />}
+          {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} showToast={showToast} diagnostics={user.role === "admin"} />}
           {(view === "videos" || view === "plugins") && <LockedPreview kind={view} />}
           {view === "account" && <Account user={user} onReplay={async () => {
             await apiRequest("/auth/onboarding", { method: "PATCH", body: JSON.stringify({ step: 0, status: "pending" }) });
