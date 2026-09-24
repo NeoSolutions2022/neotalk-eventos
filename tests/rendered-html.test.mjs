@@ -69,11 +69,19 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /neotalk-live-output/);
   assert.match(liveRoom, /OBS Virtual Camera/);
   assert.match(liveRoom, /mountStageInWindow/);
-  assert.match(liveRoom, /retryUnprocessable/);
+  assert.match(liveRoom, /retryTransientApi/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
+  assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 60000/);
+  assert.match(liveRoom, /scheduleAvatarProcessingWatchdog/);
+  assert.match(liveRoom, /Reiniciando o renderizador/);
   assert.match(liveRoom, /avatarCommandAcknowledgedRef/);
   assert.match(liveRoom, /else scheduleAvatarRetry\(\)/);
   assert.match(liveRoom, /toggleMicrophone/);
+  assert.match(liveRoom, /track\.onended/);
+  assert.match(liveRoom, /recorder\.onerror/);
+  assert.match(liveRoom, /LIVE_TRANSCRIPTION_BACKLOG = 6/);
+  assert.match(liveRoom, /visibilitychange/);
+  assert.match(liveRoom, /AbortSignal\.timeout\(10000\)/);
   assert.match(liveRoom, /Microfone mutado · mantendo a tradução em loop/);
   assert.match(liveRoom, /--stage-zoom/);
   assert.match(liveRoom, /Aumentar zoom/);
@@ -99,6 +107,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(rooms, /apiRequest<Room\[]>\("\/rooms"\)/);
   assert.match(apiClient, /credentials: "include"/);
   assert.match(apiClient, /X-CSRF-Token/);
+  assert.match(apiClient, /API_REQUEST_TIMEOUT_MS = 60000/);
   assert.match(proxy, /\[204, 205, 304\]\.includes\(upstream\.status\)/);
   assert.match(proxy, /bodyless \? null/);
   assert.match(compose, /postgres:16-alpine/);

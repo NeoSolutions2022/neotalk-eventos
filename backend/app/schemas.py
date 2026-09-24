@@ -41,7 +41,7 @@ class OnboardingUpdate(BaseModel):
 
 class RoomCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    avatar: AvatarId = "lia"
+    avatar: AvatarId = "elia"
 
 
 class RoomFinish(BaseModel):

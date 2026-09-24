@@ -17,6 +17,7 @@ export class ApiError extends Error {
 }
 
 let csrfToken = "";
+const API_REQUEST_TIMEOUT_MS = 60000;
 
 export function setSession(user: SessionUser | null) {
   csrfToken = user?.csrf_token || "";
@@ -27,7 +28,18 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) headers.set("X-CSRF-Token", csrfToken);
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) abortFromCaller();
+  else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => controller.abort(new DOMException("A API excedeu o tempo de resposta.", "TimeoutError")), API_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include", signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromCaller);
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new ApiError(response.status, payload.detail || `Falha da API (${response.status})`);

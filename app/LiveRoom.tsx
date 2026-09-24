@@ -39,17 +39,27 @@ const LIVE_IDLE_LOOP_GAP_MS = 320;
 const LIVE_API_RETRY_DELAYS_MS = [350, 800];
 const LIVE_AVATAR_RETRY_DELAY_MS = 2500;
 const LIVE_AVATAR_MAX_RETRIES = 2;
+const LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 60000;
+const LIVE_AVATAR_MAX_RECOVERIES = 2;
+const LIVE_FALLBACK_CHUNK_MS = 3200;
+const LIVE_TRANSCRIPTION_CONCURRENCY = 2;
+const LIVE_TRANSCRIPTION_BACKLOG = 6;
+const LIVE_HEARTBEAT_INTERVAL_MS = 25000;
+const LIVE_HEARTBEAT_RETRY_MS = 5000;
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
   return apiRequest<T>(path, options);
 }
 
-async function retryUnprocessable<T>(request: () => Promise<T>): Promise<T> {
+async function retryTransientApi<T>(request: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await request();
     } catch (reason) {
-      if (!(reason instanceof ApiError) || reason.status !== 422 || attempt >= LIVE_API_RETRY_DELAYS_MS.length) throw reason;
+      const retryable = reason instanceof ApiError
+        ? reason.status === 408 || reason.status === 422 || reason.status === 429 || reason.status >= 500
+        : reason instanceof DOMException && ["AbortError", "TimeoutError"].includes(reason.name);
+      if (!retryable || attempt >= LIVE_API_RETRY_DELAYS_MS.length) throw reason;
       await new Promise((resolve) => window.setTimeout(resolve, LIVE_API_RETRY_DELAYS_MS[attempt]));
     }
   }
@@ -72,18 +82,29 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
   const fallbackStreamRef = useRef<MediaStream | null>(null);
   const fallbackChunkTimerRef = useRef<number | null>(null);
+  const fallbackCaptureGenerationRef = useRef(0);
+  const fallbackRecoveryInFlightRef = useRef(false);
+  const fallbackTranscriptionQueueRef = useRef<{ blob: Blob; generation: number }[]>([]);
+  const fallbackTranscriptionInFlightRef = useRef(0);
+  const recoverFallbackCaptureRef = useRef<() => void>(() => undefined);
   const heartbeatTimerRef = useRef<number | null>(null);
+  const heartbeatInFlightRef = useRef(false);
+  const heartbeatFailuresRef = useRef(0);
   const restartRecognitionRef = useRef<(delay?: number) => void>(() => undefined);
   const listeningRef = useRef(false);
   const microphoneMutedRef = useRef(false);
   const restartTimerRef = useRef<number | null>(null);
   const recognitionWatchdogRef = useRef<number | null>(null);
+  const sessionHealthTimerRef = useRef<number | null>(null);
   const recognitionActivityAtRef = useRef(0);
   const batchTimerRef = useRef<number | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const idleLoopTimerRef = useRef<number | null>(null);
   const avatarRetryTimerRef = useRef<number | null>(null);
+  const avatarProcessingTimerRef = useRef<number | null>(null);
   const avatarRetryCountRef = useRef(0);
+  const avatarRecoveryCountRef = useRef(0);
+  const avatarWidgetReloadCountRef = useRef(0);
   const avatarCommandAcknowledgedRef = useRef(false);
   const avatarPlaybackStartedRef = useRef(false);
   const wordBufferRef = useRef<string[]>([]);
@@ -190,6 +211,11 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     avatarRetryTimerRef.current = null;
   };
 
+  const clearAvatarProcessingTimer = () => {
+    if (avatarProcessingTimerRef.current) window.clearTimeout(avatarProcessingTimerRef.current);
+    avatarProcessingTimerRef.current = null;
+  };
+
   const playIdleLoopPhrase = () => {
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
@@ -202,6 +228,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     idleLoopActiveRef.current = true;
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
+    avatarRecoveryCountRef.current = 0;
+    avatarWidgetReloadCountRef.current = 0;
     avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     setAvatarError("");
@@ -235,11 +263,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     // eslint-disable-next-line react-hooks/purity
     lastSpeechAtRef.current = Date.now();
     clearIdleLoopTimer();
-    clearAvatarRetryTimer();
-    avatarRetryCountRef.current = 0;
-    avatarCommandAcknowledgedRef.current = false;
-    avatarPlaybackStartedRef.current = false;
     if (idleLoopActiveRef.current) {
+      clearAvatarRetryTimer();
+      clearAvatarProcessingTimer();
+      avatarRetryCountRef.current = 0;
+      avatarRecoveryCountRef.current = 0;
+      avatarCommandAcknowledgedRef.current = false;
+      avatarPlaybackStartedRef.current = false;
       if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
       idleLoopActiveRef.current = false;
@@ -254,6 +284,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     if (!avatarReadyRef.current || avatarBusyRef.current || !pendingBatchesRef.current.length) return;
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
+    clearAvatarProcessingTimer();
     while (pendingBatchesRef.current[0]?.status === "error") pendingBatchesRef.current.shift();
     const first = pendingBatchesRef.current[0];
     if (!first || first.status !== "ready") return;
@@ -264,6 +295,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     activeBatchRef.current = next;
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
+    avatarRecoveryCountRef.current = 0;
+    avatarWidgetReloadCountRef.current = 0;
     avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     refreshBatchView();
@@ -283,7 +316,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     batch.status = "translating";
     void updateRemoteBatch(batch.id, "translating");
     refreshBatchView();
-    const request = retryUnprocessable(() => roomApi<AgentTranslation>("/agent/translate", {
+    const request = retryTransientApi(() => roomApi<AgentTranslation>("/agent/translate", {
       method: "POST",
       body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null }),
     })).then((agent) => {
@@ -294,7 +327,11 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }).catch((reason) => {
       const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
       batch.status = "error";
-      if (!(reason instanceof ApiError) || reason.status !== 422) setAvatarError(message);
+      if (diagnostics) setAvatarError(message);
+      else {
+        setAvatarError("");
+        setAvatarStatus("A tradução segue ouvindo os próximos trechos");
+      }
       void updateRemoteBatch(batch.id, "error", message);
     }).finally(() => {
       agentPromisesRef.current.delete(batch.id);
@@ -317,6 +354,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   };
 
   const completeActiveBatch = (status: "done" | "error") => {
+    clearAvatarProcessingTimer();
     if (!activeBatchRef.current) return;
     const completedBatch = activeBatchRef.current;
     completedBatch.status = status;
@@ -339,6 +377,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
   const releaseAvatarAfterRetryFailure = () => {
     clearAvatarRetryTimer();
+    clearAvatarProcessingTimer();
     avatarRetryCountRef.current = 0;
     avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
@@ -384,6 +423,44 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     else scheduleAvatarRetry();
   };
 
+  const recoverAcceptedAvatarPhrase = () => {
+    clearAvatarProcessingTimer();
+    if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
+    if (avatarRecoveryCountRef.current >= LIVE_AVATAR_MAX_RECOVERIES) {
+      if (avatarWidgetReloadCountRef.current >= 1 || !frameRef.current) {
+        releaseAvatarAfterRetryFailure();
+        return;
+      }
+      avatarWidgetReloadCountRef.current += 1;
+      avatarReadyRef.current = false;
+      setAvatarReady(false);
+      setAvatarStatus(`Reiniciando o renderizador da ${avatarNames[avatar]}`);
+      frameRef.current.src = widgetUrl;
+      return;
+    }
+    const phrase = idleLoopActiveRef.current
+      ? recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1]
+      : activeBatchRef.current;
+    const text = phrase?.glossText || phrase?.text;
+    if (!text) {
+      releaseAvatarAfterRetryFailure();
+      return;
+    }
+    avatarRecoveryCountRef.current += 1;
+    avatarCommandAcknowledgedRef.current = false;
+    avatarPlaybackStartedRef.current = false;
+    setAvatarStatus(`Reconectando ${avatarNames[avatar]} à tradução`);
+    const command = idleLoopActiveRef.current && avatarSupportsReplayRef.current ? "neotalk:replay" : "neotalk:sign";
+    if (!sendToAvatar({ type: command, phrase: text })) releaseAvatarAfterRetryFailure();
+    else scheduleAvatarRetry();
+  };
+
+  const scheduleAvatarProcessingWatchdog = () => {
+    clearAvatarProcessingTimer();
+    if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
+    avatarProcessingTimerRef.current = window.setTimeout(recoverAcceptedAvatarPhrase, LIVE_AVATAR_PROCESSING_TIMEOUT_MS);
+  };
+
   const scheduleAvatarRetry = () => {
     clearAvatarRetryTimer();
     if (avatarPlaybackStartedRef.current || avatarCommandAcknowledgedRef.current) return;
@@ -427,11 +504,11 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   useEffect(() => {
     const statusLabels: Record<string, string> = {
       loading_avatar: "Carregando avatar 3D",
-      ready: "Lia conectada",
+      ready: `${avatarNames[avatar]} conectada`,
       queued: "Tradução recebida",
       processing: "Preparando tradução",
       loading_pose: "Preparando avatar",
-      playing: "Lia sinalizando",
+      playing: `${avatarNames[avatar]} sinalizando`,
     };
 
     const onMessage = (event: MessageEvent) => {
@@ -444,17 +521,30 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         setAvatarReady(true);
         setAvatarError("");
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
-        window.setTimeout(dispatchNextBatch, 100);
+        window.setTimeout(() => {
+          const active = activeBatchRef.current;
+          if (active && avatarBusyRef.current && !avatarPlaybackStartedRef.current) {
+            avatarCommandAcknowledgedRef.current = false;
+            if (sendToAvatar({ type: "neotalk:sign", phrase: active.glossText || active.text })) scheduleAvatarRetry();
+            else releaseAvatarAfterRetryFailure();
+          } else {
+            dispatchNextBatch();
+          }
+        }, 100);
       } else if (data.type === "neotalk:status" && data.status) {
         if (avatarBusyRef.current && ["queued", "processing", "loading_pose"].includes(data.status)) {
           avatarCommandAcknowledgedRef.current = true;
           clearAvatarRetryTimer();
           avatarRetryCountRef.current = 0;
+          scheduleAvatarProcessingWatchdog();
         }
         setAvatarStatus(statusLabels[data.status] || data.status);
       } else if (data.type === "neotalk:playing") {
         clearAvatarRetryTimer();
+        clearAvatarProcessingTimer();
         avatarRetryCountRef.current = 0;
+        avatarRecoveryCountRef.current = 0;
+        avatarWidgetReloadCountRef.current = 0;
         avatarCommandAcknowledgedRef.current = true;
         avatarPlaybackStartedRef.current = true;
         setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
@@ -508,9 +598,48 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     fallbackChunkTimerRef.current = null;
   };
 
+  const pumpFallbackTranscriptions = () => {
+    while (
+      fallbackTranscriptionInFlightRef.current < LIVE_TRANSCRIPTION_CONCURRENCY
+      && fallbackTranscriptionQueueRef.current.length
+    ) {
+      const queued = fallbackTranscriptionQueueRef.current.shift();
+      if (!queued) return;
+      const { blob, generation } = queued;
+      fallbackTranscriptionInFlightRef.current += 1;
+      void apiRequest<{ text: string }>("/agent/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": blob.type.split(";", 1)[0] },
+        body: blob,
+      }).then(({ text }) => {
+        if (!text || !listeningRef.current || generation !== fallbackCaptureGenerationRef.current) return;
+        interruptIdleLoopForSpeech();
+        setLastCaption(text);
+        setInterimCaption("");
+        addTranscriptToBuffer(text);
+      }).catch(() => {
+        if (diagnostics) setBackendStatus("Trecho de áudio não transcrito");
+      }).finally(() => {
+        fallbackTranscriptionInFlightRef.current = Math.max(0, fallbackTranscriptionInFlightRef.current - 1);
+        pumpFallbackTranscriptions();
+      });
+    }
+  };
+
+  const queueFallbackTranscription = (blob: Blob, generation: number) => {
+    if (fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG) {
+      fallbackTranscriptionQueueRef.current.shift();
+      if (diagnostics) setBackendStatus("Áudio recuperado após lentidão da rede");
+    }
+    fallbackTranscriptionQueueRef.current.push({ blob, generation });
+    pumpFallbackTranscriptions();
+  };
+
   const startFallbackChunk = () => {
     const stream = fallbackStreamRef.current;
-    if (!stream || !listeningRef.current || microphoneMutedRef.current || fallbackRecorderRef.current?.state === "recording") return;
+    const track = stream?.getAudioTracks()[0];
+    if (!stream || !track || track.readyState !== "live" || !listeningRef.current || microphoneMutedRef.current || fallbackRecorderRef.current?.state === "recording") return;
+    const generation = fallbackCaptureGenerationRef.current;
     const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type)) || "";
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     const chunks: BlobPart[] = [];
@@ -518,32 +647,27 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
     recorder.onstop = () => {
       clearFallbackChunkTimer();
-      fallbackRecorderRef.current = null;
-      const shouldProcess = listeningRef.current && !microphoneMutedRef.current;
+      if (fallbackRecorderRef.current === recorder) fallbackRecorderRef.current = null;
+      if (generation !== fallbackCaptureGenerationRef.current) return;
+      const shouldProcess = listeningRef.current && !microphoneMutedRef.current && track.readyState === "live";
       if (shouldProcess) window.setTimeout(startFallbackChunk, 30);
       if (!shouldProcess || !chunks.length) return;
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      void apiRequest<{ text: string }>("/agent/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": blob.type.split(";", 1)[0] },
-        body: blob,
-      }).then(({ text }) => {
-        if (!text || !listeningRef.current) return;
-        interruptIdleLoopForSpeech();
-        setLastCaption(text);
-        setInterimCaption("");
-        addTranscriptToBuffer(text);
-      }).catch(() => {
-        if (diagnostics) setBackendStatus("Trecho de áudio não transcrito");
-      });
+      queueFallbackTranscription(blob, generation);
+    };
+    recorder.onerror = () => {
+      if (generation !== fallbackCaptureGenerationRef.current || !listeningRef.current || microphoneMutedRef.current) return;
+      recoverFallbackCaptureRef.current();
     };
     recorder.start();
     fallbackChunkTimerRef.current = window.setTimeout(() => {
       if (recorder.state === "recording") recorder.stop();
-    }, 3200);
+    }, LIVE_FALLBACK_CHUNK_MS);
   };
 
   const stopFallbackCapture = (releaseStream = true) => {
+    fallbackCaptureGenerationRef.current += 1;
+    fallbackTranscriptionQueueRef.current = [];
     clearFallbackChunkTimer();
     try { if (fallbackRecorderRef.current?.state === "recording") fallbackRecorderRef.current.stop(); } catch { /* já encerrado */ }
     fallbackRecorderRef.current = null;
@@ -553,10 +677,84 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
   };
 
+  const bindFallbackStream = (stream: MediaStream) => {
+    const track = stream.getAudioTracks()[0];
+    if (!track) throw new Error("Nenhuma faixa de áudio disponível.");
+    track.onended = () => {
+      if (listeningRef.current && !microphoneMutedRef.current) recoverFallbackCaptureRef.current();
+    };
+    if (track.label) setMicrophoneName(track.label);
+    fallbackStreamRef.current = stream;
+  };
+
+  const recoverFallbackCapture = async () => {
+    if (fallbackRecoveryInFlightRef.current || !listeningRef.current || microphoneMutedRef.current || !navigator.onLine) return;
+    fallbackRecoveryInFlightRef.current = true;
+    try {
+      stopFallbackCapture();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!listeningRef.current || microphoneMutedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      bindFallbackStream(stream);
+      setTranscriptionEngine("server");
+      setAvatarStatus("Microfone reconectado");
+      startFallbackChunk();
+    } catch {
+      if (diagnostics) setBackendStatus("Reconectando microfone");
+      window.setTimeout(() => recoverFallbackCaptureRef.current(), 2000);
+    } finally {
+      fallbackRecoveryInFlightRef.current = false;
+    }
+  };
+  recoverFallbackCaptureRef.current = () => { void recoverFallbackCapture(); };
+
   const selectAvatar = (value: AvatarId) => {
     setAvatar(value);
     if (sendToAvatar({ type: "neotalk:set-avatar", avatar: value })) setAvatarStatus("Trocando avatar");
   };
+
+  function clearHeartbeat() {
+    if (heartbeatTimerRef.current) window.clearTimeout(heartbeatTimerRef.current);
+    heartbeatTimerRef.current = null;
+  }
+
+  function scheduleHeartbeat(delay = LIVE_HEARTBEAT_INTERVAL_MS) {
+    clearHeartbeat();
+    if (!roomIdRef.current) return;
+    heartbeatTimerRef.current = window.setTimeout(() => { void runHeartbeat(); }, delay);
+  }
+
+  async function runHeartbeat() {
+    const roomId = roomIdRef.current;
+    if (!roomId || heartbeatInFlightRef.current) return;
+    heartbeatInFlightRef.current = true;
+    try {
+      await roomApi<void>(`/rooms/${roomId}/heartbeat`, {
+        method: "POST",
+        signal: AbortSignal.timeout(10000),
+      });
+      heartbeatFailuresRef.current = 0;
+      if (diagnostics) setBackendStatus("Sala conectada ao histórico");
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 404 && roomIdRef.current === roomId) {
+        try {
+          await roomApi<RoomResponse>(`/rooms/${roomId}/start`, { method: "POST" });
+          heartbeatFailuresRef.current = 0;
+          if (diagnostics) setBackendStatus("Histórico da sala retomado");
+        } catch {
+          heartbeatFailuresRef.current += 1;
+        }
+      } else {
+        heartbeatFailuresRef.current += 1;
+      }
+      if (diagnostics && heartbeatFailuresRef.current) setBackendStatus("Reconectando histórico da sala");
+    } finally {
+      heartbeatInFlightRef.current = false;
+      scheduleHeartbeat(heartbeatFailuresRef.current ? LIVE_HEARTBEAT_RETRY_MS : LIVE_HEARTBEAT_INTERVAL_MS);
+    }
+  }
 
   const stopLiveRoom = () => {
     listeningRef.current = false;
@@ -564,6 +762,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     setMicrophoneMuted(false);
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
+    clearAvatarProcessingTimer();
     idleLoopActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
@@ -571,8 +770,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     recognitionRef.current?.stop();
     recognitionRef.current = null;
     stopFallbackCapture();
-    if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
-    heartbeatTimerRef.current = null;
+    clearHeartbeat();
+    heartbeatFailuresRef.current = 0;
     sendToAvatar({ type: "neotalk:pause" });
     setInterimCaption("");
     flushWordBuffer(true);
@@ -600,7 +799,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       const track = stream.getAudioTracks()[0];
       if (track?.label) setMicrophoneName(track.label);
       if (SpeechRecognitionApi) stream.getTracks().forEach((item) => item.stop());
-      else fallbackStreamRef.current = stream;
+      else bindFallbackStream(stream);
 
       setBackendStatus("Criando sala");
       let room: RoomResponse;
@@ -630,11 +829,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       lastSpeechAtRef.current = Date.now();
       setBackendStatus("Sala conectada ao histórico");
 
-      if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
-      heartbeatTimerRef.current = window.setInterval(() => {
-        const activeRoomId = roomIdRef.current;
-        if (activeRoomId) void roomApi<void>(`/rooms/${activeRoomId}/heartbeat`, { method: "POST" }).catch(() => undefined);
-      }, 25000);
+      heartbeatFailuresRef.current = 0;
+      scheduleHeartbeat();
 
       if (!SpeechRecognitionApi) {
         listeningRef.current = true;
@@ -661,10 +857,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         recognitionRef.current = null;
         try {
           const compatibleStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const compatibleTrack = compatibleStream.getAudioTracks()[0];
-          if (compatibleTrack?.label) setMicrophoneName(compatibleTrack.label);
           stopFallbackCapture();
-          fallbackStreamRef.current = compatibleStream;
+          bindFallbackStream(compatibleStream);
           listeningRef.current = true;
           microphoneMutedRef.current = false;
           setMicrophoneMuted(false);
@@ -738,7 +932,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       recognitionActivityAtRef.current = Date.now();
       if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
       recognitionWatchdogRef.current = window.setInterval(() => {
-        if (!listeningRef.current || microphoneMutedRef.current || Date.now() - recognitionActivityAtRef.current < 30000) return;
+        if (document.visibilityState === "hidden" || !navigator.onLine || !listeningRef.current || microphoneMutedRef.current || Date.now() - recognitionActivityAtRef.current < 30000) return;
         recognitionActivityAtRef.current = Date.now();
         try {
           recognition.abort();
@@ -791,6 +985,33 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
   };
 
+  useEffect(() => {
+    const restoreLongRunningSession = () => {
+      if (document.visibilityState === "hidden" || !navigator.onLine || !listeningRef.current) return;
+      if (roomIdRef.current && !heartbeatInFlightRef.current) void runHeartbeat();
+      if (microphoneMutedRef.current) return;
+      const stream = fallbackStreamRef.current;
+      if (stream) {
+        const track = stream.getAudioTracks()[0];
+        if (!track || track.readyState !== "live") recoverFallbackCaptureRef.current();
+        else if (!fallbackRecorderRef.current || fallbackRecorderRef.current.state === "inactive") startFallbackChunk();
+      } else if (recognitionRef.current && Date.now() - recognitionActivityAtRef.current >= 30000) {
+        try { recognitionRef.current.abort(); } catch { restartRecognitionRef.current(0); }
+      }
+      if (avatarReadyRef.current) window.setTimeout(dispatchNextBatch, 100);
+    };
+
+    window.addEventListener("online", restoreLongRunningSession);
+    document.addEventListener("visibilitychange", restoreLongRunningSession);
+    sessionHealthTimerRef.current = window.setInterval(restoreLongRunningSession, 10000);
+    return () => {
+      window.removeEventListener("online", restoreLongRunningSession);
+      document.removeEventListener("visibilitychange", restoreLongRunningSession);
+      if (sessionHealthTimerRef.current) window.clearInterval(sessionHealthTimerRef.current);
+      sessionHealthTimerRef.current = null;
+    };
+  }, []);
+
   const adjustStageZoom = (delta: number) => {
     setStageZoom((value) => Math.min(1.5, Math.max(0.7, Math.round((value + delta) * 10) / 10)));
   };
@@ -800,11 +1021,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     recognitionRef.current?.abort();
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
+    if (sessionHealthTimerRef.current) window.clearInterval(sessionHealthTimerRef.current);
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
     if (idleLoopTimerRef.current) window.clearTimeout(idleLoopTimerRef.current);
     if (avatarRetryTimerRef.current) window.clearTimeout(avatarRetryTimerRef.current);
-    if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
+    if (avatarProcessingTimerRef.current) window.clearTimeout(avatarProcessingTimerRef.current);
+    if (heartbeatTimerRef.current) window.clearTimeout(heartbeatTimerRef.current);
     const outputWindow = externalWindowRef.current;
     const stage = stageRef.current;
     const home = stageHomeRef.current;

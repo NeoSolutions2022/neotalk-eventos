@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS lead_access_tickets (
 CREATE TABLE IF NOT EXISTS rooms (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(160) NOT NULL,
-    avatar VARCHAR(24) NOT NULL DEFAULT 'lia',
+    avatar VARCHAR(24) NOT NULL DEFAULT 'elia',
     status VARCHAR(24) NOT NULL DEFAULT 'ready',
     started_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ,
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 );
 
 ALTER TABLE rooms ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE rooms ALTER COLUMN avatar SET DEFAULT 'elia';
 
 CREATE TABLE IF NOT EXISTS translation_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -168,7 +169,7 @@ async def expire_stale_rooms(pool: asyncpg.Pool, user_id: UUID | None = None) ->
         WHERE status IN ('ready','live')
           AND (($1::UUID IS NULL) OR user_id=$1)
           AND ((status='ready' AND updated_at < NOW()-INTERVAL '15 minutes')
-            OR (status='live' AND updated_at < NOW()-INTERVAL '2 minutes'))
+            OR (status='live' AND updated_at < NOW()-INTERVAL '10 minutes'))
         """,
         user_id,
     )
