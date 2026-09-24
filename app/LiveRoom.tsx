@@ -206,7 +206,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const externalWindow = externalWindowRef.current;
     if (externalWindow && !externalWindow.closed) {
       if (!avatarReadyRef.current || !externalFrameRef.current?.contentWindow) return embeddedSent;
-      externalFrameRef.current.contentWindow.postMessage(message, widgetOrigin);
+      externalWindow.postMessage({ type: "neotalk:external-player-command", message }, window.location.origin);
       return true;
     }
     return embeddedSent;
@@ -537,6 +537,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       const fromEmbeddedFrame = event.source === frameRef.current?.contentWindow;
       const fromExternalFrame = event.source === externalFrameRef.current?.contentWindow;
       if (event.origin !== widgetOrigin || (!fromEmbeddedFrame && !fromExternalFrame)) return;
+      if (fromEmbeddedFrame && event.data?.type === "neotalk:ready") embeddedAvatarReadyRef.current = true;
       if ((externalActive && !fromExternalFrame) || (!externalActive && !fromEmbeddedFrame)) return;
       const data = event.data as AvatarMessage;
 
@@ -555,6 +556,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
             else releaseAvatarAfterRetryFailure();
           } else {
             dispatchNextBatch();
+            scheduleIdleLoop();
           }
         }, 100);
       } else if (data.type === "neotalk:status" && data.status) {
@@ -1094,6 +1096,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (sourceWindow && externalWindowRef.current !== sourceWindow) return;
     const messageHandler = avatarMessageHandlerRef.current;
     if (sourceWindow && messageHandler) sourceWindow.removeEventListener("message", messageHandler);
+    resetPlaybackForOutputChange();
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
@@ -1109,8 +1112,23 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         if (sendToAvatar({ type: "neotalk:sign", phrase: active.glossText || active.text })) scheduleAvatarRetry();
       } else {
         dispatchNextBatch();
+        scheduleIdleLoop();
       }
     }, 100);
+  };
+
+  const resetPlaybackForOutputChange = () => {
+    clearAvatarRetryTimer();
+    clearAvatarProcessingTimer();
+    clearIdleLoopTimer();
+    if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
+    playbackTimerRef.current = null;
+    avatarCommandAcknowledgedRef.current = false;
+    avatarPlaybackStartedRef.current = false;
+    avatarRetryCountRef.current = 0;
+    avatarRecoveryCountRef.current = 0;
+    idleLoopActiveRef.current = false;
+    avatarBusyRef.current = Boolean(activeBatchRef.current);
   };
 
   const mountStageInWindow = async (targetWindow: Window, mode: "pip" | "window") => {
@@ -1134,6 +1152,13 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       .neotalk-output-shell .exit-fullscreen { display: none !important; }
     `;
     targetDocument.head.appendChild(outputStyles);
+    await new Promise<void>((resolve, reject) => {
+      const relay = targetDocument.createElement("script");
+      relay.src = new URL("/external-player-relay.js?v=2", window.location.origin).href;
+      relay.onload = () => resolve();
+      relay.onerror = () => reject(new Error("Não foi possível conectar o mini-player."));
+      targetDocument.head.appendChild(relay);
+    });
     const shell = targetDocument.createElement("main");
     shell.className = "neotalk-output-shell";
     const outputStage = targetDocument.createElement("div");
@@ -1164,6 +1189,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = targetWindow;
     externalFrameRef.current = outputFrame;
     externalCaptionRef.current = caption;
+    resetPlaybackForOutputChange();
     avatarReadyRef.current = false;
     setAvatarReady(false);
     setAvatarStatus(`Conectando à ${avatarNames[avatar]} no mini-player`);
