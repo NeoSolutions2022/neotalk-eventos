@@ -77,6 +77,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.doesNotMatch(liveRoom, /Formato do player/);
   assert.match(externalPlayerRelay, /frame\.contentWindow\.postMessage/);
   assert.match(liveRoom, /retryTransientApi/);
+  assert.match(liveRoom, /agent\.skipped/);
+  assert.doesNotMatch(liveRoom, /avatarError && <div className="avatar-error"/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
   assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 60000/);
   assert.match(liveRoom, /scheduleAvatarProcessingWatchdog/);
@@ -122,6 +124,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(compose, /container_name: neotalk-api/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms"/);
   assert.match(api, /@app\.post\("\/api\/v1\/agent\/transcribe"/);
+  assert.match(api, /"skipped": True/);
   assert.match(api, /@app\.post\("\/api\/v1\/rooms\/\{room_id\}\/heartbeat"/);
   assert.match(api, /\$4::TEXT IN \('completed','skipped'\)/);
   assert.match(api, /@app\.patch\("\/api\/v1\/batches\/\{batch_id\}"/);

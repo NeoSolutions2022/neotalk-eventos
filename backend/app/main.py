@@ -320,7 +320,16 @@ async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depend
         payload.batch_id, user.id, user.role,
     ):
         raise HTTPException(status_code=404, detail="Lote não encontrado.")
-    result = await translate_to_glosses(pool, payload.text)
+    try:
+        result = await translate_to_glosses(pool, payload.text)
+    except HTTPException as exception:
+        if exception.status_code != status.HTTP_422_UNPROCESSABLE_ENTITY:
+            raise
+        return {
+            "gloss_text": "",
+            "skipped": True,
+            "reason": str(exception.detail),
+        }
     if payload.batch_id:
         await pool.execute(
             """

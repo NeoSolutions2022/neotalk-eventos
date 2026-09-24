@@ -26,7 +26,7 @@ type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number;
 type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; words?: unknown[]; capabilities?: string[] };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
-type AgentTranslation = { gloss_text: string; prompt_id: string; model: string; agent_latency_ms: number };
+type AgentTranslation = { gloss_text: string; prompt_id?: string; model?: string; agent_latency_ms?: number; skipped?: boolean; reason?: string };
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
@@ -57,7 +57,7 @@ async function retryTransientApi<T>(request: () => Promise<T>): Promise<T> {
       return await request();
     } catch (reason) {
       const retryable = reason instanceof ApiError
-        ? reason.status === 408 || reason.status === 422 || reason.status === 429 || reason.status >= 500
+        ? reason.status === 408 || reason.status === 429 || reason.status >= 500
         : reason instanceof DOMException && ["AbortError", "TimeoutError"].includes(reason.name);
       if (!retryable || attempt >= LIVE_API_RETRY_DELAYS_MS.length) throw reason;
       await new Promise((resolve) => window.setTimeout(resolve, LIVE_API_RETRY_DELAYS_MS[attempt]));
@@ -128,7 +128,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const [avatar, setAvatar] = useState<AvatarId>("elia");
   const [avatarReady, setAvatarReady] = useState(false);
   const [avatarStatus, setAvatarStatus] = useState("Conectando à Elia");
-  const [avatarError, setAvatarError] = useState("");
+  const [, setAvatarError] = useState("");
   const [interimCaption, setInterimCaption] = useState("");
   const [lastCaption, setLastCaption] = useState("");
   const [microphoneName, setMicrophoneName] = useState("Microfone padrão");
@@ -192,7 +192,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const refreshBatchView = () => {
     const active = activeBatchRef.current ? [{ ...activeBatchRef.current }] : [];
-    setBatches([...active, ...pendingBatchesRef.current].slice(0, 4));
+    const visiblePending = pendingBatchesRef.current.filter((batch) => batch.status !== "error");
+    setBatches([...active, ...visiblePending].slice(0, 4));
   };
 
   const sendToAvatar = (message: Record<string, unknown>) => {
@@ -330,6 +331,12 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       method: "POST",
       body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null }),
     })).then((agent) => {
+      if (agent.skipped || !agent.gloss_text.trim()) {
+        batch.status = "error";
+        setAvatarError("");
+        void updateRemoteBatch(batch.id, "error", agent.reason || "Trecho sem glosa disponível no catálogo.");
+        return;
+      }
       batch.glossText = agent.gloss_text;
       batch.status = "ready";
       agentResultsRef.current.set(batch.id, agent);
@@ -1214,7 +1221,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
           <div className="stage-brand">neo<strong>talk</strong></div>
           <div className="live-captions" aria-live="polite">{recording ? (microphoneMuted ? (lastCaption || "Microfone mutado · mantendo a tradução em loop") : (interimCaption || lastCaption || "Ouvindo…")) : "Inicie a sala para capturar o microfone e gerar legendas."}</div>
           <span className="stage-language">PT → LIBRAS</span>
-          {avatarError && <div className="avatar-error">{avatarError}</div>}
         </div>
         <div className="capture-controls"><div className={`audio-source ${recording && !microphoneMuted ? "listening" : ""} ${microphoneMuted ? "muted" : ""}`}><span>{microphoneMuted ? "×" : "⌁"}</span><div><small>{microphoneMuted ? "MICROFONE MUTADO" : recording ? `MICROFONE CAPTURANDO · ${transcriptionEngine === "server" ? "MODO COMPATÍVEL" : "TEMPO REAL"}` : "ENTRADA DE ÁUDIO"}</small><b>{microphoneName}</b></div><span className="audio-level" aria-hidden="true"><i/><i/><i/><i/></span></div>{recording && <button className={`mute-button ${microphoneMuted ? "active" : ""}`} onClick={toggleMicrophone}>{microphoneMuted ? "Ativar microfone" : "Mutar microfone"}</button>}<button className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{recording ? "Encerrar sala" : "Iniciar sala ao vivo"}</button></div>
       </section>
