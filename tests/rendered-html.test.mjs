@@ -80,7 +80,11 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /agent\.skipped/);
   assert.doesNotMatch(liveRoom, /avatarError && <div className="avatar-error"/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
-  assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 60000/);
+  assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 75000/);
+  assert.match(liveRoom, /recentPosesRef/);
+  assert.match(liveRoom, /poseCommandFor\(phrase\.glossText \|\| phrase\.text\)/);
+  assert.match(liveRoom, /neotalk:pose-stage/);
+  assert.match(liveRoom, /Copiar diagnóstico/);
   assert.match(liveRoom, /scheduleAvatarProcessingWatchdog/);
   assert.match(liveRoom, /Reiniciando o renderizador/);
   assert.match(liveRoom, /avatarCommandAcknowledgedRef/);
