@@ -23,7 +23,8 @@ type SpeechRecognitionLike = {
 };
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number; height?: number }) => Promise<Window> };
-type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; words?: unknown[]; capabilities?: string[] };
+type SharedPose = { phrase: string; pose: { content_url: string; fps?: number }; words: string[] };
+type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
 type AgentTranslation = { gloss_text: string; prompt_id?: string; model?: string; agent_latency_ms?: number; skipped?: boolean; reason?: string };
@@ -78,6 +79,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalCaptionRef = useRef<HTMLDivElement | null>(null);
   const embeddedAvatarReadyRef = useRef(false);
+  const externalAvatarReadyRef = useRef(false);
+  const avatarSupportsSharedPoseRef = useRef(false);
+  const externalSupportsSharedPoseRef = useRef(false);
+  const latestPoseRef = useRef<SharedPose | null>(null);
   const avatarMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
@@ -205,11 +210,19 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
     const externalWindow = externalWindowRef.current;
     if (externalWindow && !externalWindow.closed) {
-      if (!avatarReadyRef.current || !externalFrameRef.current?.contentWindow) return embeddedSent;
+      if (!embeddedSent && ["neotalk:sign", "neotalk:replay"].includes(String(message.type))) return false;
+      if (!externalAvatarReadyRef.current || !externalFrameRef.current?.contentWindow) return embeddedSent;
+      if (avatarSupportsSharedPoseRef.current && externalSupportsSharedPoseRef.current && ["neotalk:sign", "neotalk:replay"].includes(String(message.type))) return embeddedSent;
       externalWindow.postMessage({ type: "neotalk:external-player-command", message }, window.location.origin);
       return true;
     }
     return embeddedSent;
+  };
+
+  const sendSharedPoseToExternal = (shared: SharedPose) => {
+    const outputWindow = externalWindowRef.current;
+    if (!outputWindow || outputWindow.closed || !externalAvatarReadyRef.current || !externalSupportsSharedPoseRef.current) return;
+    outputWindow.postMessage({ type: "neotalk:external-player-command", message: { type: "neotalk:load-pose", ...shared } }, window.location.origin);
   };
 
   const clearIdleLoopTimer = () => {
@@ -302,6 +315,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const next = pendingBatchesRef.current.shift();
     if (!next) return;
     next.status = "playing";
+    latestPoseRef.current = null;
     void updateRemoteBatch(next.id, "translating");
     activeBatchRef.current = next;
     avatarBusyRef.current = true;
@@ -444,9 +458,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     clearAvatarProcessingTimer();
     if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
     if (avatarRecoveryCountRef.current >= LIVE_AVATAR_MAX_RECOVERIES) {
-      const activeFrame = externalWindowRef.current && !externalWindowRef.current.closed
-        ? externalFrameRef.current
-        : frameRef.current;
+      const activeFrame = frameRef.current;
       if (avatarWidgetReloadCountRef.current >= 1 || !activeFrame) {
         releaseAvatarAfterRetryFailure();
         return;
@@ -532,19 +544,38 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     };
 
     const onMessage = (event: MessageEvent) => {
-      const externalWindow = externalWindowRef.current;
-      const externalActive = Boolean(externalWindow && !externalWindow.closed);
       const fromEmbeddedFrame = event.source === frameRef.current?.contentWindow;
       const fromExternalFrame = event.source === externalFrameRef.current?.contentWindow;
       if (event.origin !== widgetOrigin || (!fromEmbeddedFrame && !fromExternalFrame)) return;
-      if (fromEmbeddedFrame && event.data?.type === "neotalk:ready") embeddedAvatarReadyRef.current = true;
-      if ((externalActive && !fromExternalFrame) || (!externalActive && !fromEmbeddedFrame)) return;
       const data = event.data as AvatarMessage;
 
+      if (fromExternalFrame) {
+        if (data.type === "neotalk:ready") {
+          externalAvatarReadyRef.current = true;
+          externalSupportsSharedPoseRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("shared-pose");
+          if (latestPoseRef.current && externalSupportsSharedPoseRef.current) sendSharedPoseToExternal(latestPoseRef.current);
+          else if (!externalSupportsSharedPoseRef.current) {
+            const phrase = activeBatchRef.current?.glossText || activeBatchRef.current?.text || latestPoseRef.current?.phrase;
+            if (phrase) externalWindowRef.current?.postMessage({ type: "neotalk:external-player-command", message: { type: "neotalk:sign", phrase } }, window.location.origin);
+          }
+        } else if (data.type === "neotalk:status" && data.status === "loading_avatar") {
+          externalAvatarReadyRef.current = false;
+        }
+        return;
+      }
+
+      if (data.type === "neotalk:pose-ready" && data.phrase && data.pose?.content_url) {
+        const shared = { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [] };
+        latestPoseRef.current = shared;
+        sendSharedPoseToExternal(shared);
+        return;
+      }
+
       if (data.type === "neotalk:ready") {
-        if (fromEmbeddedFrame) embeddedAvatarReadyRef.current = true;
+        embeddedAvatarReadyRef.current = true;
         avatarReadyRef.current = true;
         avatarSupportsReplayRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("replay");
+        avatarSupportsSharedPoseRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("shared-pose");
         setAvatarReady(true);
         setAvatarError("");
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
@@ -583,11 +614,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
           Math.max(2600, wordCount * 850),
         );
       } else if (data.type === "neotalk:error") {
+        if (data.code === "transient_api_error" && diagnostics) {
+          console.warn("Falha transitória na pose", { stage: data.stage, traceId: data.traceId, message: data.message });
+        }
         if (data.code === "pose_cache_miss" && idleLoopActiveRef.current) {
           const phrase = recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1];
           if (phrase && sendToAvatar({ type: "neotalk:sign", phrase: phrase.glossText || phrase.text })) return;
         }
-        if (isRetryableAvatarError(data.message)) {
+        if (data.code === "transient_api_error" || isRetryableAvatarError(data.message)) {
           setAvatarError("");
           setAvatarStatus("Reconectando a tradução");
           avatarCommandAcknowledgedRef.current = false;
@@ -750,6 +784,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   recoverFallbackCaptureRef.current = () => { void recoverFallbackCapture(); };
 
   const selectAvatar = (value: AvatarId) => {
+    latestPoseRef.current = null;
     setAvatar(value);
     if (sendToAvatar({ type: "neotalk:set-avatar", avatar: value })) setAvatarStatus("Trocando avatar");
   };
@@ -1096,39 +1131,12 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (sourceWindow && externalWindowRef.current !== sourceWindow) return;
     const messageHandler = avatarMessageHandlerRef.current;
     if (sourceWindow && messageHandler) sourceWindow.removeEventListener("message", messageHandler);
-    resetPlaybackForOutputChange();
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
-    avatarReadyRef.current = embeddedAvatarReadyRef.current;
-    setAvatarReady(embeddedAvatarReadyRef.current);
-    setAvatarStatus(embeddedAvatarReadyRef.current ? `${avatarNames[avatar]} conectada` : `Conectando à ${avatarNames[avatar]}`);
+    externalAvatarReadyRef.current = false;
+    externalSupportsSharedPoseRef.current = false;
     setExternalPlayerMode(null);
-    window.setTimeout(() => {
-      const active = activeBatchRef.current;
-      if (active && avatarBusyRef.current && embeddedAvatarReadyRef.current) {
-        avatarCommandAcknowledgedRef.current = false;
-        avatarPlaybackStartedRef.current = false;
-        if (sendToAvatar({ type: "neotalk:sign", phrase: active.glossText || active.text })) scheduleAvatarRetry();
-      } else {
-        dispatchNextBatch();
-        scheduleIdleLoop();
-      }
-    }, 100);
-  };
-
-  const resetPlaybackForOutputChange = () => {
-    clearAvatarRetryTimer();
-    clearAvatarProcessingTimer();
-    clearIdleLoopTimer();
-    if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
-    playbackTimerRef.current = null;
-    avatarCommandAcknowledgedRef.current = false;
-    avatarPlaybackStartedRef.current = false;
-    avatarRetryCountRef.current = 0;
-    avatarRecoveryCountRef.current = 0;
-    idleLoopActiveRef.current = false;
-    avatarBusyRef.current = Boolean(activeBatchRef.current);
   };
 
   const mountStageInWindow = async (targetWindow: Window, mode: "pip" | "window") => {
@@ -1189,10 +1197,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = targetWindow;
     externalFrameRef.current = outputFrame;
     externalCaptionRef.current = caption;
-    resetPlaybackForOutputChange();
-    avatarReadyRef.current = false;
-    setAvatarReady(false);
-    setAvatarStatus(`Conectando à ${avatarNames[avatar]} no mini-player`);
+    externalAvatarReadyRef.current = false;
+    externalSupportsSharedPoseRef.current = false;
     setExternalPlayerMode(mode);
     targetWindow.addEventListener("pagehide", () => restoreStage(targetWindow), { once: true });
     outputFrame.src = widgetUrl;
