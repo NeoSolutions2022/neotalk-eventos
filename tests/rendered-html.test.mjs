@@ -69,6 +69,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /neotalk-live-output/);
   assert.match(liveRoom, /OBS Virtual Camera/);
   assert.match(liveRoom, /mountStageInWindow/);
+  assert.match(liveRoom, /avatarMessageHandlerRef/);
+  assert.match(liveRoom, /targetWindow\.addEventListener\("message", messageHandler\)/);
   assert.match(liveRoom, /retryTransientApi/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
   assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 60000/);

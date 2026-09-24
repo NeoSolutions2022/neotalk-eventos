@@ -78,6 +78,7 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
   const stageRef = useRef<HTMLDivElement>(null);
   const externalWindowRef = useRef<Window | null>(null);
   const stageHomeRef = useRef<{ parent: Node; marker: HTMLElement } | null>(null);
+  const avatarMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
   const fallbackStreamRef = useRef<MediaStream | null>(null);
@@ -589,8 +590,14 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
       }
     };
 
+    avatarMessageHandlerRef.current = onMessage;
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    externalWindowRef.current?.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      externalWindowRef.current?.removeEventListener("message", onMessage);
+      if (avatarMessageHandlerRef.current === onMessage) avatarMessageHandlerRef.current = null;
+    };
   }, [avatar, diagnostics, showToast, widgetOrigin]);
 
   const clearFallbackChunkTimer = () => {
@@ -1049,6 +1056,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
 
   const restoreStage = (sourceWindow?: Window) => {
     if (sourceWindow && externalWindowRef.current !== sourceWindow) return;
+    const messageHandler = avatarMessageHandlerRef.current;
+    if (sourceWindow && messageHandler) sourceWindow.removeEventListener("message", messageHandler);
     const stage = stageRef.current;
     const home = stageHomeRef.current;
     if (stage && home?.parent.isConnected && home.marker.parentNode === home.parent) home.parent.replaceChild(stage, home.marker);
@@ -1076,6 +1085,8 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
     }
 
     const targetDocument = targetWindow.document;
+    const messageHandler = avatarMessageHandlerRef.current;
+    if (messageHandler) targetWindow.addEventListener("message", messageHandler);
     targetDocument.title = "NeoTalk · Tradução em Libras";
     targetDocument.documentElement.lang = "pt-BR";
     targetDocument.head.replaceChildren();
