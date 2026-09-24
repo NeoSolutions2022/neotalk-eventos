@@ -77,7 +77,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const externalWindowRef = useRef<Window | null>(null);
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalCaptionRef = useRef<HTMLDivElement | null>(null);
-  const externalRelayReadyRef = useRef(false);
   const embeddedAvatarReadyRef = useRef(false);
   const avatarMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -199,19 +198,18 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const sendToAvatar = (message: Record<string, unknown>) => {
+    let embeddedSent = false;
+    if (embeddedAvatarReadyRef.current && frameRef.current?.contentWindow) {
+      frameRef.current.contentWindow.postMessage(message, widgetOrigin);
+      embeddedSent = true;
+    }
     const externalWindow = externalWindowRef.current;
     if (externalWindow && !externalWindow.closed) {
-      if (!avatarReadyRef.current || !externalRelayReadyRef.current || !externalFrameRef.current?.contentWindow) return false;
-      externalWindow.postMessage({
-        type: "neotalk:external-player-command",
-        message,
-        widgetOrigin,
-      }, window.location.origin);
+      if (!avatarReadyRef.current || !externalFrameRef.current?.contentWindow) return embeddedSent;
+      externalFrameRef.current.contentWindow.postMessage(message, widgetOrigin);
       return true;
     }
-    if (!avatarReadyRef.current || !frameRef.current?.contentWindow) return false;
-    frameRef.current.contentWindow.postMessage(message, widgetOrigin);
-    return true;
+    return embeddedSent;
   };
 
   const clearIdleLoopTimer = () => {
@@ -1079,7 +1077,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
-    externalRelayReadyRef.current = false;
     if (outputWindow && !outputWindow.closed) outputWindow.close();
     stopFallbackCapture();
     const roomId = roomIdRef.current;
@@ -1100,7 +1097,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
-    externalRelayReadyRef.current = false;
     avatarReadyRef.current = embeddedAvatarReadyRef.current;
     setAvatarReady(embeddedAvatarReadyRef.current);
     setAvatarStatus(embeddedAvatarReadyRef.current ? `${avatarNames[avatar]} conectada` : `Conectando à ${avatarNames[avatar]}`);
@@ -1138,18 +1134,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       .neotalk-output-shell .exit-fullscreen { display: none !important; }
     `;
     targetDocument.head.appendChild(outputStyles);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const relay = targetDocument.createElement("script");
-        relay.src = new URL("/external-player-relay.js", window.location.origin).toString();
-        relay.onload = () => resolve();
-        relay.onerror = () => reject(new Error("Não foi possível preparar a comunicação do mini-player."));
-        targetDocument.head.appendChild(relay);
-      });
-    } catch (reason) {
-      if (messageHandler) targetWindow.removeEventListener("message", messageHandler);
-      throw reason;
-    }
     const shell = targetDocument.createElement("main");
     shell.className = "neotalk-output-shell";
     const outputStage = targetDocument.createElement("div");
@@ -1180,7 +1164,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = targetWindow;
     externalFrameRef.current = outputFrame;
     externalCaptionRef.current = caption;
-    externalRelayReadyRef.current = true;
     avatarReadyRef.current = false;
     setAvatarReady(false);
     setAvatarStatus(`Conectando à ${avatarNames[avatar]} no mini-player`);
