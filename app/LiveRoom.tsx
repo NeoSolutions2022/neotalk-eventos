@@ -75,8 +75,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const externalWindowRef = useRef<Window | null>(null);
+  const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const externalCaptionRef = useRef<HTMLDivElement | null>(null);
   const externalRelayReadyRef = useRef(false);
-  const stageHomeRef = useRef<{ parent: Node; marker: HTMLElement } | null>(null);
+  const embeddedAvatarReadyRef = useRef(false);
   const avatarMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
@@ -197,10 +199,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const sendToAvatar = (message: Record<string, unknown>) => {
-    if (!avatarReadyRef.current || !frameRef.current?.contentWindow) return false;
     const externalWindow = externalWindowRef.current;
     if (externalWindow && !externalWindow.closed) {
-      if (!externalRelayReadyRef.current) return false;
+      if (!avatarReadyRef.current || !externalRelayReadyRef.current || !externalFrameRef.current?.contentWindow) return false;
       externalWindow.postMessage({
         type: "neotalk:external-player-command",
         message,
@@ -208,6 +209,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       }, window.location.origin);
       return true;
     }
+    if (!avatarReadyRef.current || !frameRef.current?.contentWindow) return false;
     frameRef.current.contentWindow.postMessage(message, widgetOrigin);
     return true;
   };
@@ -444,7 +446,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     clearAvatarProcessingTimer();
     if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
     if (avatarRecoveryCountRef.current >= LIVE_AVATAR_MAX_RECOVERIES) {
-      if (avatarWidgetReloadCountRef.current >= 1 || !frameRef.current) {
+      const activeFrame = externalWindowRef.current && !externalWindowRef.current.closed
+        ? externalFrameRef.current
+        : frameRef.current;
+      if (avatarWidgetReloadCountRef.current >= 1 || !activeFrame) {
         releaseAvatarAfterRetryFailure();
         return;
       }
@@ -452,7 +457,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       avatarReadyRef.current = false;
       setAvatarReady(false);
       setAvatarStatus(`Reiniciando o renderizador da ${avatarNames[avatar]}`);
-      frameRef.current.src = widgetUrl;
+      activeFrame.src = widgetUrl;
       return;
     }
     const phrase = idleLoopActiveRef.current
@@ -529,10 +534,16 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     };
 
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== widgetOrigin || event.source !== frameRef.current?.contentWindow) return;
+      const externalWindow = externalWindowRef.current;
+      const externalActive = Boolean(externalWindow && !externalWindow.closed);
+      const fromEmbeddedFrame = event.source === frameRef.current?.contentWindow;
+      const fromExternalFrame = event.source === externalFrameRef.current?.contentWindow;
+      if (event.origin !== widgetOrigin || (!fromEmbeddedFrame && !fromExternalFrame)) return;
+      if ((externalActive && !fromExternalFrame) || (!externalActive && !fromEmbeddedFrame)) return;
       const data = event.data as AvatarMessage;
 
       if (data.type === "neotalk:ready") {
+        if (fromEmbeddedFrame) embeddedAvatarReadyRef.current = true;
         avatarReadyRef.current = true;
         avatarSupportsReplayRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("replay");
         setAvatarReady(true);
@@ -1044,6 +1055,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     setStageZoom((value) => Math.min(1.5, Math.max(0.7, Math.round((value + delta) * 10) / 10)));
   };
 
+  useEffect(() => {
+    const caption = externalCaptionRef.current;
+    if (!caption) return;
+    caption.textContent = recording
+      ? (microphoneMuted ? (lastCaption || "Microfone mutado · mantendo a tradução em loop") : (interimCaption || lastCaption || "Ouvindo…"))
+      : "Inicie a sala para capturar o microfone e gerar legendas.";
+  }, [interimCaption, lastCaption, microphoneMuted, recording]);
+
   useEffect(() => () => {
     listeningRef.current = false;
     recognitionRef.current?.abort();
@@ -1057,12 +1076,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (avatarProcessingTimerRef.current) window.clearTimeout(avatarProcessingTimerRef.current);
     if (heartbeatTimerRef.current) window.clearTimeout(heartbeatTimerRef.current);
     const outputWindow = externalWindowRef.current;
-    const stage = stageRef.current;
-    const home = stageHomeRef.current;
-    if (stage && home?.parent.isConnected && home.marker.parentNode === home.parent) home.parent.replaceChild(stage, home.marker);
     externalWindowRef.current = null;
+    externalFrameRef.current = null;
+    externalCaptionRef.current = null;
     externalRelayReadyRef.current = false;
-    stageHomeRef.current = null;
     if (outputWindow && !outputWindow.closed) outputWindow.close();
     stopFallbackCapture();
     const roomId = roomIdRef.current;
@@ -1080,18 +1097,27 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (sourceWindow && externalWindowRef.current !== sourceWindow) return;
     const messageHandler = avatarMessageHandlerRef.current;
     if (sourceWindow && messageHandler) sourceWindow.removeEventListener("message", messageHandler);
-    const stage = stageRef.current;
-    const home = stageHomeRef.current;
-    if (stage && home?.parent.isConnected && home.marker.parentNode === home.parent) home.parent.replaceChild(stage, home.marker);
     externalWindowRef.current = null;
-    stageHomeRef.current = null;
+    externalFrameRef.current = null;
+    externalCaptionRef.current = null;
+    externalRelayReadyRef.current = false;
+    avatarReadyRef.current = embeddedAvatarReadyRef.current;
+    setAvatarReady(embeddedAvatarReadyRef.current);
+    setAvatarStatus(embeddedAvatarReadyRef.current ? `${avatarNames[avatar]} conectada` : `Conectando à ${avatarNames[avatar]}`);
     setExternalPlayerMode(null);
+    window.setTimeout(() => {
+      const active = activeBatchRef.current;
+      if (active && avatarBusyRef.current && embeddedAvatarReadyRef.current) {
+        avatarCommandAcknowledgedRef.current = false;
+        avatarPlaybackStartedRef.current = false;
+        if (sendToAvatar({ type: "neotalk:sign", phrase: active.glossText || active.text })) scheduleAvatarRetry();
+      } else {
+        dispatchNextBatch();
+      }
+    }, 100);
   };
 
   const mountStageInWindow = async (targetWindow: Window, mode: "pip" | "window") => {
-    const stage = stageRef.current;
-    if (!stage) throw new Error("O player ainda não está pronto.");
-
     const targetDocument = targetWindow.document;
     const messageHandler = avatarMessageHandlerRef.current;
     if (messageHandler) targetWindow.addEventListener("message", messageHandler);
@@ -1108,6 +1134,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       html, body, .neotalk-output-shell { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #10233f; }
       .neotalk-output-shell { display: grid; }
       .neotalk-output-shell .live-stage { width: 100%; height: 100% !important; min-height: 0; border-radius: 0; }
+      .neotalk-output-shell .avatar-widget-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
       .neotalk-output-shell .exit-fullscreen { display: none !important; }
     `;
     targetDocument.head.appendChild(outputStyles);
@@ -1123,29 +1150,43 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (messageHandler) targetWindow.removeEventListener("message", messageHandler);
       throw reason;
     }
-    if (!stageHomeRef.current) {
-      const marker = document.createElement("div");
-      marker.className = "external-player-placeholder";
-      const markerIcon = document.createElement("span");
-      markerIcon.textContent = "▣";
-      const markerTitle = document.createElement("b");
-      markerTitle.textContent = "Saída externa ativa";
-      const markerDescription = document.createElement("small");
-      markerDescription.textContent = "O avatar e as legendas estão na janela separada.";
-      marker.append(markerIcon, markerTitle, markerDescription);
-      const parent = stage.parentNode as Node;
-      parent.insertBefore(marker, stage);
-      stageHomeRef.current = { parent, marker };
-    }
     const shell = targetDocument.createElement("main");
     shell.className = "neotalk-output-shell";
+    const outputStage = targetDocument.createElement("div");
+    outputStage.className = "live-stage";
+    const outputFrame = targetDocument.createElement("iframe");
+    outputFrame.className = "avatar-widget-frame";
+    outputFrame.title = "Avatar 3D NeoTalk";
+    outputFrame.allow = "fullscreen";
+    const brand = targetDocument.createElement("div");
+    brand.className = "stage-brand";
+    brand.append("neo");
+    const brandStrong = targetDocument.createElement("strong");
+    brandStrong.textContent = "talk";
+    brand.appendChild(brandStrong);
+    const caption = targetDocument.createElement("div");
+    caption.className = "live-captions";
+    caption.setAttribute("aria-live", "polite");
+    caption.textContent = recording
+      ? (microphoneMuted ? (lastCaption || "Microfone mutado · mantendo a tradução em loop") : (interimCaption || lastCaption || "Ouvindo…"))
+      : "Inicie a sala para capturar o microfone e gerar legendas.";
+    const language = targetDocument.createElement("span");
+    language.className = "stage-language";
+    language.textContent = "PT → LIBRAS";
+    outputStage.append(outputFrame, brand, caption, language);
+    shell.appendChild(outputStage);
     targetDocument.body.replaceChildren(shell);
-    shell.appendChild(stage);
 
     externalWindowRef.current = targetWindow;
+    externalFrameRef.current = outputFrame;
+    externalCaptionRef.current = caption;
     externalRelayReadyRef.current = true;
+    avatarReadyRef.current = false;
+    setAvatarReady(false);
+    setAvatarStatus(`Conectando à ${avatarNames[avatar]} no mini-player`);
     setExternalPlayerMode(mode);
     targetWindow.addEventListener("pagehide", () => restoreStage(targetWindow), { once: true });
+    outputFrame.src = widgetUrl;
     targetWindow.focus();
   };
 

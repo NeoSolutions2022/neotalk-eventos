@@ -74,6 +74,9 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /targetWindow\.addEventListener\("message", messageHandler\)/);
   assert.match(liveRoom, /neotalk:external-player-command/);
   assert.match(liveRoom, /external-player-relay\.js/);
+  assert.match(liveRoom, /externalFrameRef/);
+  assert.match(liveRoom, /outputStage\.append\(outputFrame, brand, caption, language\)/);
+  assert.doesNotMatch(liveRoom, /shell\.appendChild\(stage\)/);
   assert.doesNotMatch(liveRoom, /Formato do player/);
   assert.match(externalPlayerRelay, /frame\.contentWindow\.postMessage/);
   assert.match(liveRoom, /retryTransientApi/);
