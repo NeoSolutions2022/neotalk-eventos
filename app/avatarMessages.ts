@@ -5,8 +5,9 @@ const NON_BLOCKING_AVATAR_PATTERNS = [
 ];
 
 const RETRYABLE_AVATAR_PATTERNS = [
-  /(?:erro|error|status|http)?\s*422\b/i,
+  /(?:erro|error|status|http|falha http)?\s*(?:408|422|429|500|502|503|504)\b/i,
   /unprocessable entity/i,
+  /(?:network|rede|fetch|temporariamente indisponível|timeout|tempo de resposta)/i,
 ];
 
 export function isNonBlockingAvatarError(message?: string) {

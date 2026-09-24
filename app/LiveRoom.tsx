@@ -562,8 +562,13 @@ export default function LiveRoom({ recording, setRecording, time, playerMode, se
         }
         if (isRetryableAvatarError(data.message)) {
           setAvatarError("");
+          setAvatarStatus("Reconectando a tradução");
           avatarCommandAcknowledgedRef.current = false;
-          if (!avatarPlaybackStartedRef.current) scheduleAvatarRetry();
+          clearAvatarRetryTimer();
+          clearAvatarProcessingTimer();
+          if (!avatarPlaybackStartedRef.current) {
+            avatarRetryTimerRef.current = window.setTimeout(recoverAcceptedAvatarPhrase, LIVE_AVATAR_RETRY_DELAY_MS);
+          }
           return;
         }
         if (isNonBlockingAvatarError(data.message)) {

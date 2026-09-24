@@ -106,6 +106,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(quality, /isNonBlockingAvatarError/);
   assert.match(avatarMessages, /não confirmou \(\?:o \)\?carregamento da pose/);
   assert.match(avatarMessages, /unprocessable entity/);
+  assert.match(avatarMessages, /500\|502\|503\|504/);
   assert.match(rooms, /apiRequest<Room\[]>\("\/rooms"\)/);
   assert.match(apiClient, /credentials: "include"/);
   assert.match(apiClient, /X-CSRF-Token/);
