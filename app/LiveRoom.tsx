@@ -23,7 +23,7 @@ type SpeechRecognitionLike = {
 };
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number; height?: number }) => Promise<Window> };
-type SharedPose = { phrase: string; pose: { content_url: string; fps?: number }; words: string[]; loadId?: string; traceId?: string; taskId?: string };
+type SharedPose = { phrase: string; pose: { content_url: string; fps?: number; frame_count?: number }; words: string[]; loadId?: string; traceId?: string; taskId?: string };
 type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type PoseDiagnostic = { at: string; output: "principal" | "mini-player"; batchId: number | null; event: string; stage?: string; code?: string; loadId?: string; correlationId?: string; traceId?: string; taskId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type RoomResponse = { id: string; status: string };
@@ -34,7 +34,7 @@ const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://i
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 const LIVE_BATCH_MIN_WORDS = 2;
 const LIVE_BATCH_MAX_WORDS = 12;
-const LIVE_BATCH_SILENCE_MS = 650;
+const LIVE_BATCH_SILENCE_MS = 500;
 const LIVE_AGENT_CONCURRENCY = 2;
 const LIVE_IDLE_LOOP_DELAY_MS = 2200;
 const LIVE_IDLE_LOOP_GAP_MS = 320;
@@ -49,6 +49,15 @@ const LIVE_TRANSCRIPTION_BACKLOG = 6;
 const LIVE_HEARTBEAT_INTERVAL_MS = 25000;
 const LIVE_HEARTBEAT_RETRY_MS = 5000;
 const poseKey = (phrase: string) => phrase.replace(/\s+/g, " ").trim().toUpperCase();
+
+function playbackDurationMs(pose: SharedPose["pose"] | undefined, wordCount: number): number {
+  const frameCount = pose?.frame_count ?? 0;
+  const fps = pose?.fps ?? 0;
+  if (Number.isFinite(frameCount) && Number.isFinite(fps) && frameCount > 0 && fps > 0) {
+    return Math.ceil((frameCount / fps) * 1000) + 300;
+  }
+  return Math.max(3500, wordCount * 1300);
+}
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
   return apiRequest<T>(path, options);
@@ -322,7 +331,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     idleLoopActiveRef.current = false;
     avatarBusyRef.current = false;
     setAvatarStatus(`${avatarNames[avatar]} aguardando nova fala`);
-    scheduleIdleLoop(LIVE_IDLE_LOOP_GAP_MS);
+    dispatchNextBatch();
+    if (!avatarBusyRef.current) scheduleIdleLoop(LIVE_IDLE_LOOP_GAP_MS);
   };
 
   const interruptIdleLoopForSpeech = () => {
@@ -331,23 +341,15 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     lastSpeechAtRef.current = Date.now();
     clearIdleLoopTimer();
     if (idleLoopActiveRef.current) {
-      clearAvatarRetryTimer();
-      clearAvatarProcessingTimer();
-      avatarRetryCountRef.current = 0;
-      avatarRecoveryCountRef.current = 0;
-      avatarCommandAcknowledgedRef.current = false;
-      avatarPlaybackStartedRef.current = false;
-      if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
-      playbackTimerRef.current = null;
-      idleLoopActiveRef.current = false;
-      avatarBusyRef.current = false;
-      sendToAvatar({ type: "neotalk:pause" });
-      setAvatarStatus("Nova fala detectada");
+      // Preserve a palavra final do sinal em execução. A nova fala é traduzida
+      // em paralelo e entra na fila assim que a pose atual termina.
+      setAvatarStatus("Nova fala detectada · concluindo sinal atual");
+      return;
     }
     scheduleIdleLoop();
   };
 
-  const dispatchNextBatch = () => {
+  function dispatchNextBatch() {
     if (!avatarReadyRef.current || avatarBusyRef.current || !pendingBatchesRef.current.length) return;
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
@@ -378,7 +380,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       avatarBusyRef.current = false;
       refreshBatchView();
     } else scheduleAvatarRetry();
-  };
+  }
 
   const translateBatch = (batch: LiveBatch) => {
     if (batch.status !== "queued" || agentPromisesRef.current.has(batch.id)) return;
@@ -572,7 +574,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     const delay = /[.!?;:]$/.test(text.trim()) ? 180 : LIVE_BATCH_SILENCE_MS;
-    batchTimerRef.current = window.setTimeout(flushWordBuffer, delay);
+    batchTimerRef.current = window.setTimeout(() => flushWordBuffer(true), delay);
   };
 
   useEffect(() => {
@@ -670,7 +672,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
         playbackTimerRef.current = window.setTimeout(
           () => idleLoopActiveRef.current ? finishIdleLoopPhrase() : completeActiveBatch("done"),
-          Math.max(2600, wordCount * 850),
+          playbackDurationMs(latestPoseRef.current?.pose, wordCount),
         );
       } else if (data.type === "neotalk:error") {
         const reportedCorrelation = data.correlationId || data.loadId;

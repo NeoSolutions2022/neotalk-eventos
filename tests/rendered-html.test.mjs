@@ -54,7 +54,12 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
   assert.match(liveRoom, /className="live-captions"/);
   assert.match(liveRoom, /window\.location\.href = "\/salas"/);
-  assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 650/);
+  assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 500/);
+  assert.match(liveRoom, /batchTimerRef\.current = window\.setTimeout\(\(\) => flushWordBuffer\(true\), delay\)/);
+  assert.match(liveRoom, /playbackDurationMs\(latestPoseRef\.current\?\.pose, wordCount\)/);
+  assert.match(liveRoom, /Number\.isFinite\(frameCount\)/);
+  assert.match(liveRoom, /recognition\.lang = "pt-BR"/);
+  assert.match(services, /"language": "pt"/);
   assert.match(liveRoom, /LIVE_AGENT_CONCURRENCY = 2/);
   assert.match(liveRoom, /LIVE_IDLE_LOOP_DELAY_MS = 2200/);
   assert.match(liveRoom, /recentPhrasesRef\.current.*slice\(-2\)/);
