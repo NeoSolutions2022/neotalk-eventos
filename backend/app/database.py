@@ -146,6 +146,10 @@ CREATE TABLE IF NOT EXISTS quality_ratings (
     UNIQUE (quality_run_id, output)
 );
 
+ALTER TABLE quality_ratings ADD COLUMN IF NOT EXISTS audio_data BYTEA;
+ALTER TABLE quality_ratings ADD COLUMN IF NOT EXISTS audio_mime_type VARCHAR(80);
+ALTER TABLE quality_ratings ADD COLUMN IF NOT EXISTS audio_duration_ms INTEGER;
+
 CREATE INDEX IF NOT EXISTS idx_rooms_created_at ON rooms(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rooms_user_created_at ON rooms(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(token_hash) WHERE revoked_at IS NULL;

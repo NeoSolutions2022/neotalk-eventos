@@ -59,7 +59,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
@@ -385,7 +385,19 @@ async def create_quality_run(payload: QualityRunCreate, pool: asyncpg.Pool = Dep
 
 @app.get("/api/v1/admin/quality-runs")
 async def list_quality_runs(limit: int = 20, pool: asyncpg.Pool = Depends(get_pool), _: CurrentUser = Depends(admin_user)) -> list[dict]:
-    rows = await pool.fetch("SELECT * FROM quality_runs ORDER BY created_at DESC LIMIT $1", min(max(limit, 1), 100))
+    rows = await pool.fetch(
+        """
+        SELECT quality_runs.*,
+               quality_ratings.score AS rating_score,
+               quality_ratings.notes AS rating_notes,
+               quality_ratings.audio_data IS NOT NULL AS rating_has_audio
+        FROM quality_runs
+        LEFT JOIN quality_ratings ON quality_ratings.quality_run_id=quality_runs.id
+          AND quality_ratings.output='comparison'
+        ORDER BY quality_runs.created_at DESC LIMIT $1
+        """,
+        min(max(limit, 1), 100),
+    )
     return [record_dict(row) for row in rows]
 
 
@@ -426,11 +438,103 @@ async def rate_quality_run(run_id: UUID, payload: QualityRatingCreate, pool: asy
         VALUES ($1,$2,$3,$4)
         ON CONFLICT (quality_run_id, output)
         DO UPDATE SET score=EXCLUDED.score, notes=EXCLUDED.notes, created_at=NOW()
-        RETURNING *
+        RETURNING id, quality_run_id, output, score, notes, created_at,
+                  audio_data IS NOT NULL AS has_audio, audio_mime_type, audio_duration_ms
         """,
         run_id, payload.output, payload.score, payload.notes,
     )
     return record_dict(row)
+
+
+@app.get("/api/v1/admin/quality-runs/{run_id}/ratings/{output}")
+async def get_quality_rating(
+    run_id: UUID,
+    output: str,
+    pool: asyncpg.Pool = Depends(get_pool),
+    _: CurrentUser = Depends(admin_user),
+) -> dict:
+    if output not in {"video", "avatar", "comparison"}:
+        raise HTTPException(status_code=422, detail="Tipo de avaliação inválido.")
+    row = await pool.fetchrow(
+        """
+        SELECT id, quality_run_id, output, score, notes, created_at,
+               audio_data IS NOT NULL AS has_audio, audio_mime_type, audio_duration_ms
+        FROM quality_ratings WHERE quality_run_id=$1 AND output=$2
+        """,
+        run_id, output,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Avaliação não encontrada.")
+    return record_dict(row)
+
+
+@app.put("/api/v1/admin/quality-runs/{run_id}/ratings/{output}/audio")
+async def save_quality_rating_audio(
+    run_id: UUID,
+    output: str,
+    request: Request,
+    duration_ms: int = 0,
+    pool: asyncpg.Pool = Depends(get_pool),
+    _: CurrentUser = Depends(admin_csrf),
+) -> dict:
+    if output not in {"video", "avatar", "comparison"}:
+        raise HTTPException(status_code=422, detail="Tipo de avaliação inválido.")
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type not in {"audio/webm", "audio/ogg", "audio/mp4", "audio/wav"}:
+        raise HTTPException(status_code=415, detail="Formato de áudio não suportado.")
+    content = await request.body()
+    if not content:
+        raise HTTPException(status_code=422, detail="A observação em áudio está vazia.")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="O áudio deve ter no máximo 5 MB.")
+    if duration_ms < 0 or duration_ms > 120_000:
+        raise HTTPException(status_code=422, detail="O áudio deve ter no máximo 2 minutos.")
+    row = await pool.fetchrow(
+        """
+        UPDATE quality_ratings
+        SET audio_data=$3, audio_mime_type=$4, audio_duration_ms=$5, created_at=NOW()
+        WHERE quality_run_id=$1 AND output=$2
+        RETURNING id, quality_run_id, output, score, notes, created_at,
+                  TRUE AS has_audio, audio_mime_type, audio_duration_ms
+        """,
+        run_id, output, content, content_type, duration_ms,
+    )
+    if not row:
+        raise HTTPException(status_code=409, detail="Salve a avaliação antes de anexar o áudio.")
+    return record_dict(row)
+
+
+@app.get("/api/v1/admin/quality-runs/{run_id}/ratings/{output}/audio")
+async def get_quality_rating_audio(
+    run_id: UUID,
+    output: str,
+    pool: asyncpg.Pool = Depends(get_pool),
+    _: CurrentUser = Depends(admin_user),
+) -> Response:
+    row = await pool.fetchrow(
+        "SELECT audio_data, audio_mime_type FROM quality_ratings WHERE quality_run_id=$1 AND output=$2",
+        run_id, output,
+    )
+    if not row or not row["audio_data"]:
+        raise HTTPException(status_code=404, detail="Observação em áudio não encontrada.")
+    return Response(content=bytes(row["audio_data"]), media_type=row["audio_mime_type"] or "audio/webm")
+
+
+@app.delete("/api/v1/admin/quality-runs/{run_id}/ratings/{output}/audio", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_quality_rating_audio(
+    run_id: UUID,
+    output: str,
+    pool: asyncpg.Pool = Depends(get_pool),
+    _: CurrentUser = Depends(admin_csrf),
+) -> Response:
+    result = await pool.execute(
+        """UPDATE quality_ratings SET audio_data=NULL, audio_mime_type=NULL, audio_duration_ms=NULL
+           WHERE quality_run_id=$1 AND output=$2""",
+        run_id, output,
+    )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=404, detail="Avaliação não encontrada.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/api/v1/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
