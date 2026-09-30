@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isNonBlockingAvatarError } from "./avatarMessages";
 import { API_BASE, ApiError, apiRequest } from "./apiClient";
+import { avatarCaptureConstraints, avatarRecorderOptions, captureDetails, VideoQuality, videoQualityPresets } from "./avatarVideoQuality";
 
 type Prompt = { id: string; name: string; instructions: string; version: number; is_active: boolean; created_at: string };
 type AvatarId = "lia" | "asuna" | "elia";
@@ -45,6 +46,7 @@ type VideoCapture = {
   avatar: AvatarId;
   started: boolean;
   timer: number | null;
+  details: string;
 };
 
 function safeVideoName(avatar: AvatarId, runId: string): string {
@@ -93,6 +95,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [hasSavedAudio, setHasSavedAudio] = useState(false);
   const [capturingVideo, setCapturingVideo] = useState(false);
   const [videoCaptureStatus, setVideoCaptureStatus] = useState("Exportação experimental · selecione esta aba ao compartilhar.");
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>("high");
   const widgetUrl = `${widgetBase}?avatar=elia&loop=0&background=%2310233f`;
   const widgetOrigin = new URL(widgetBase).origin;
 
@@ -225,7 +228,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
           capture.started = true;
           if (capture.timer !== null) window.clearTimeout(capture.timer);
           capture.recorder.start(250);
-          setVideoCaptureStatus("Gravando a sinalização…");
+          setVideoCaptureStatus(`Gravando · ${capture.details}`);
           capture.timer = window.setTimeout(stopVideoCapture, Math.max(4500, Math.min(60000, wordCount * 1600 + 1500)));
           return;
         }
@@ -455,7 +458,8 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   };
 
   const captureAvatarVideo = async () => {
-    if (!run?.gloss_text || !avatarReady || !frameRef.current?.contentWindow) return;
+    if (capturingVideo || !run?.gloss_text || !avatarReady || !frameRef.current?.contentWindow) return;
+    setCapturingVideo(true);
     setError("");
     setVideoCaptureStatus("Selecione esta aba na janela de compartilhamento.");
     let stream: MediaStream | null = null;
@@ -471,7 +475,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       if (!mimeType) throw new Error("Este navegador não consegue gravar vídeo WebM.");
       const target = await cropTargetApi.fromElement(frameRef.current);
       stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: "browser" },
+        video: avatarCaptureConstraints(videoQuality),
         audio: false,
         preferCurrentTab: true,
         selfBrowserSurface: "include",
@@ -479,9 +483,12 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       const track = stream.getVideoTracks()[0] as CroppableVideoTrack | undefined;
       if (!track?.cropTo) throw new Error("Selecione esta aba do navegador para gravar somente o avatar.");
       await track.cropTo(target);
+      track.contentHint = "motion";
+      const recorder = new MediaRecorder(stream, avatarRecorderOptions(videoQuality, mimeType));
       const capture: VideoCapture = {
         stream,
-        recorder: new MediaRecorder(stream, { mimeType }),
+        recorder,
+        details: captureDetails(track.getSettings(), recorder.videoBitsPerSecond),
         chunks: [],
         phrase: run.gloss_text,
         runId: run.id,
@@ -509,7 +516,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
           showToast("Vídeo do avatar baixado");
         }
         releaseVideoCapture(capture);
-        setVideoCaptureStatus("");
+        setVideoCaptureStatus(`Vídeo salvo · ${capture.details}`);
         if (latestGlossRef.current === capture.phrase) {
           frameRef.current?.contentWindow?.postMessage({ type: "neotalk:sign", phrase: capture.phrase }, widgetOrigin);
         }
@@ -554,7 +561,21 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       <div className="quality-main">
         <div className="compare-grid">
           <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Reprodução em loop" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay loop><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
-          <article className="quality-player"><div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)} disabled={capturingVideo}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div><div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div><div className="quality-export"><button className="secondary" onClick={() => void captureAvatarVideo()} disabled={!run?.gloss_text || !avatarReady || capturingVideo}>Baixar vídeo de {avatarNames[avatar]}</button>{capturingVideo && <button className="secondary" onClick={stopVideoCapture}>Encerrar gravação</button>}{videoCaptureStatus && <small role="status">{videoCaptureStatus}</small>}</div></article>
+          <article className="quality-player">
+            <div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)} disabled={capturingVideo}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div>
+            <div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div>
+            <div className="quality-export">
+              <label className="quality-export-quality">Qualidade do vídeo
+                <select value={videoQuality} disabled={capturingVideo} onChange={(event) => setVideoQuality(event.target.value as VideoQuality)}>
+                  {Object.entries(videoQualityPresets).map(([id, preset]) => <option key={id} value={id}>{preset.label} · {preset.bitrate / 1_000_000} Mbps</option>)}
+                </select>
+              </label>
+              <button className="secondary" onClick={() => void captureAvatarVideo()} disabled={!run?.gloss_text || !avatarReady || capturingVideo}>Baixar vídeo de {avatarNames[avatar]}</button>
+              {capturingVideo && <button className="secondary" onClick={stopVideoCapture}>Encerrar gravação</button>}
+              <small className="quality-export-hint">Experimental · {videoQualityPresets[videoQuality].description}. Resolução limitada pelo widget e pelo navegador.</small>
+              {videoCaptureStatus && <small role="status">{videoCaptureStatus}</small>}
+            </div>
+          </article>
         </div>
         <section className="quality-review">
           <div className="quality-review-heading"><div><b>Avaliação do QA</b><small>Registre a fidelidade e observações desta execução.</small></div><div className="quality-stars" aria-label="Fidelidade geral">{[1,2,3,4,5].map((score) => <button key={score} aria-label={`${score} estrelas`} className={rating >= score ? "selected" : ""} onClick={() => setRating(score)} disabled={!run}>★</button>)}</div></div>

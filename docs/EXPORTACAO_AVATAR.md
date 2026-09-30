@@ -5,6 +5,21 @@ Escolha a aba atual na solicitação de compartilhamento do navegador.
 A captura é recortada para o widget e salva em WebM, sem áudio nem o restante
 da página. Se o recorte não estiver disponível, a gravação é cancelada.
 
+## Qualidade
+
+- **Leve:** taxa de vídeo solicitada de 2,5 Mbps, até 30 fps.
+- **Alta (padrão):** 8 Mbps, até 30 fps, menos compressão.
+- **Máxima:** 16 Mbps, até 60 fps, maior uso de processamento e arquivo maior.
+
+A captura pede até 3840 × 2160 para evitar reduzir a aba antes de recortar;
+isso **não garante 4K ou Full HD no arquivo do avatar**. O widget ocupa apenas
+parte da aba e sua resolução de renderização também limita os detalhes.
+O navegador pode entregar menos fps ou outra taxa de codificação. O painel
+informa as dimensões/fps reportados pela faixa e a taxa reportada pelo gravador.
+Essa taxa é uma configuração do encoder, não uma medição do bitrate do arquivo.
+Não há ampliação artificial, alteração de velocidade dos sinais ou promessa de
+60 fps reais. Aumentar apenas o bitrate não recupera detalhes ausentes no WebGL.
+
 Requer navegador desktop com Region Capture (`CropTarget`, `cropTo`), captura
 de aba e MediaRecorder. Não é uma exportação MP4 no servidor; a compatibilidade
 é detectada antes da gravação. Chrome/Edge atualizados são os alvos iniciais.
