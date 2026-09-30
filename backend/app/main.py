@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import expire_stale_rooms, get_pool, lifespan
 from .auth import (
     COOKIE_NAME, CurrentUser, admin_csrf, admin_user, create_session, csrf_user,
-    current_user, enforce_rate_limit, hash_password, normalize_email, token_hash, user_payload, verify_password,
+    current_user, enforce_rate_limit, hash_password, normalize_email, normalize_phone,
+    public_access_mode, token_hash, user_payload, verify_password,
 )
 from .schemas import (
     AgentTranslateIn,
@@ -30,6 +31,7 @@ from .schemas import (
     OnboardingUpdate,
     PasswordSetIn,
     RegisterIn,
+    QuickAccessIn,
 )
 from .services import (
     check_video,
@@ -79,6 +81,48 @@ async def security_headers(request: Request, call_next):
 async def health(pool: asyncpg.Pool = Depends(get_pool)) -> dict:
     await pool.fetchval("SELECT 1")
     return {"status": "ok", "database": "connected", "api_version": "2.0.0", "integrations": integration_status()}
+
+
+@app.get("/api/v1/auth/config")
+async def auth_config(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return {"public_access_mode": public_access_mode()}
+
+
+@app.post("/api/v1/auth/quick-access", status_code=status.HTTP_201_CREATED)
+async def quick_access(
+    payload: QuickAccessIn, response: Response, request: Request,
+    session: str | None = Cookie(default=None, alias=COOKIE_NAME),
+    pool: asyncpg.Pool = Depends(get_pool),
+) -> dict:
+    if public_access_mode() != "quick":
+        raise HTTPException(status_code=403, detail="O acesso rápido está desativado. Entre com e-mail e senha.")
+    origin = request.headers.get("origin")
+    if origin and origin not in cors_origins():
+        raise HTTPException(status_code=403, detail="Origem não autorizada.")
+    # Never replace a valid session, or authenticate an existing account by an
+    # unverified phone/name. Each new entry gets an isolated, non-admin identity.
+    if session:
+        try:
+            return user_payload(await current_user(session=session, pool=pool))
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+    enforce_rate_limit(request, "quick-access", 12, 3600)
+    name = " ".join(payload.name.split())
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="Informe seu nome.")
+    if not payload.whatsapp_phone and payload.source != "acesso":
+        raise HTTPException(status_code=422, detail="Informe seu WhatsApp.")
+    phone = normalize_phone(payload.whatsapp_phone) if payload.whatsapp_phone else None
+    row = await pool.fetchrow(
+        """INSERT INTO users(name,email,whatsapp_phone,registration_source,password_hash,password_set,role)
+           VALUES($1,NULL,$2,$3,$4,FALSE,'user')
+           RETURNING id,name,email,whatsapp_phone,role,onboarding_version,onboarding_step,onboarding_status,password_set""",
+        name, phone, payload.source, hash_password(secrets.token_urlsafe(48)),
+    )
+    csrf = await create_session(pool, row["id"], response)
+    return {**record_dict(row), "csrf_token": csrf}
 
 
 @app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
@@ -183,11 +227,17 @@ async def set_account_password(
     user: CurrentUser = Depends(csrf_user),
     pool: asyncpg.Pool = Depends(get_pool),
 ) -> dict:
-    await pool.execute(
-        "UPDATE users SET password_hash=$2,password_set=TRUE,updated_at=NOW() WHERE id=$1",
-        user.id, hash_password(payload.password),
-    )
-    return {"password_set": True}
+    email = user.email or (normalize_email(payload.email) if payload.email else None)
+    if not email:
+        raise HTTPException(status_code=422, detail="Informe um e-mail para acessar sua conta com senha.")
+    try:
+        await pool.execute(
+            "UPDATE users SET email=$3,password_hash=$2,password_set=TRUE,updated_at=NOW() WHERE id=$1",
+            user.id, hash_password(payload.password), email,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="Já existe uma conta com este e-mail. Use outro e-mail ou entre na conta existente.")
+    return {"password_set": True, "email": email}
 
 
 @app.get("/api/v1/auth/me")

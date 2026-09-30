@@ -5,7 +5,7 @@ import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
 import { isNonBlockingAvatarError } from "./avatarMessages";
-import { ApiError, SessionUser, apiRequest, authenticate, consumeLeadAccess, loadSession, setSession } from "./apiClient";
+import { ApiError, SessionUser, apiRequest, authenticate, consumeLeadAccess, loadSession, quickAccess, setSession } from "./apiClient";
 
 export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "videos" | "plugins" | "account" | "login" | "register" | "handoff";
 type AvatarId = "lia" | "asuna" | "elia";
@@ -158,31 +158,65 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
 }
 
 function AuthForm({ isLogin }: { isLogin: boolean }) {
-  const [name, setName] = useState(() => typeof window === "undefined" || isLogin ? "" : new URLSearchParams(window.location.search).get("nome") || "");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [mode, setMode] = useState<"quick" | "password" | null>(null);
+  const [passwordLogin, setPasswordLogin] = useState(false);
+  const initializing = useRef(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const quick = mode === "quick" && !passwordLogin;
+  const finish = (user: SessionUser) => {
+    const returnTo = new URLSearchParams(window.location.search).get("return_to");
+    window.location.replace(returnTo?.startsWith("/") && !returnTo.startsWith("//") ? returnTo : (user.role === "admin" ? "/qualidade" : "/salas"));
+  };
+  useEffect(() => {
+    if (initializing.current) return;
+    initializing.current = true;
+    const params = new URLSearchParams(window.location.search);
+    setPasswordLogin(params.get("senha") === "1");
+    const incomingName = params.get("nome")?.trim() || "";
+    setName(incomingName);
+    apiRequest<{ public_access_mode: "quick" | "password" }>("/auth/config").then(async (config) => {
+      setMode(config.public_access_mode);
+      // Compatibility with the deployed /acesso form's old name-only redirect.
+      // A new guest session, not proof of ownership of an existing account.
+      if (config.public_access_mode === "quick" && params.get("origem") === "acesso" && incomingName.length >= 2) {
+        setBusy(true);
+        finish(await quickAccess({ name: incomingName, source: "acesso" }));
+      }
+    }).catch((reason) => {
+      setError(reason instanceof ApiError ? reason.message : "Não foi possível preparar o acesso. Atualize a página para tentar novamente.");
+      setBusy(false);
+    });
+  // Initialization is deliberately once-only: avoid duplicate guest registrations.
+  }, []);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
     try {
-      const user = await authenticate(isLogin ? "login" : "register", { ...(isLogin ? {} : { name }), email, password });
-      const returnTo = new URLSearchParams(window.location.search).get("return_to");
-      window.location.href = returnTo?.startsWith("/") ? returnTo : (user.role === "admin" ? "/qualidade" : "/salas");
+      const user = quick ? await quickAccess({ name, whatsapp_phone: phone }) : await authenticate(isLogin ? "login" : "register", { ...(isLogin ? {} : { name }), email, password });
+      finish(user);
     } catch (reason) { setError(reason instanceof ApiError ? reason.message : "Não foi possível entrar agora."); }
     finally { setBusy(false); }
   };
   return <form className="auth-card" onSubmit={submit}>
     <span className="mobile-logo"><Logo dark /></span><p className="eyebrow">NEOTALK EVENTOS</p>
-    <h2>{isLogin ? "Que bom ter você de volta" : "Crie sua conta grátis"}</h2>
-    <p className="muted">{isLogin ? "Acesse sua central de traduções." : "A beta está aberta e não exige cartão."}</p>
-    {!isLogin && <label>Nome completo<input autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} /></label>}
-    <label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
-    <label>Senha<input type="password" minLength={isLogin ? undefined : 10} autoComplete={isLogin ? "current-password" : "new-password"} required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
-    {!isLogin && <small className="password-hint">Use pelo menos 10 caracteres.</small>}
+    <h2>{quick ? "Comece a traduzir agora" : isLogin ? "Que bom ter você de volta" : "Crie sua conta grátis"}</h2>
+    <p className="muted">{quick ? "Acesso gratuito, sem senha e sem código de confirmação." : isLogin ? "Acesse sua central de traduções." : "A beta está aberta e não exige cartão."}</p>
+    {mode === null ? <p role="status">Preparando seu acesso…</p> : <>
+    {(quick || !isLogin) && <label>Nome completo<input autoComplete="name" minLength={2} maxLength={120} required value={name} onChange={(e) => setName(e.target.value)} /></label>}
+    {quick ? <><label>WhatsApp com DDD<input type="tel" inputMode="tel" autoComplete="tel" placeholder="(85) 99999-9999" maxLength={32} required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><small className="password-hint">Seu acesso fica salvo neste navegador. Para recuperar a mesma conta depois, defina e-mail e senha no perfil.</small></> : <>
+      <label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+      <label>Senha<input type="password" minLength={isLogin ? undefined : 10} autoComplete={isLogin ? "current-password" : "new-password"} required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+      {!isLogin && <small className="password-hint">Use pelo menos 10 caracteres.</small>}
+    </>}
+    </>}
     {error && <div className="auth-error" role="alert">{error}</div>}
-    <button className="primary wide" type="submit" disabled={busy}>{busy ? "Aguarde…" : isLogin ? "Entrar na plataforma" : "Criar minha conta"}<span>→</span></button>
-    <div className="switch-auth">{isLogin ? "Ainda não tem uma conta?" : "Já possui uma conta?"}<a className="link" href={isLogin ? "/cadastro" : "/login"}>{isLogin ? "Criar conta" : "Entrar"}</a></div>
+    <button className="primary wide" type="submit" disabled={busy || mode === null}>{busy ? "Aguarde…" : quick || isLogin ? "Entrar na plataforma" : "Criar minha conta"}<span>→</span></button>
+    {mode === "quick" && <div className="switch-auth">{quick ? <a className="link" href="/login?senha=1">Entrar com e-mail e senha · Administrador</a> : <button type="button" className="link" onClick={() => { setPasswordLogin(false); setError(""); }}>Usar acesso rápido</button>}</div>}
+    {!quick && <div className="switch-auth">{isLogin ? "Ainda não tem uma conta?" : "Já possui uma conta?"}<a className="link" href={isLogin ? "/cadastro?senha=1" : "/login?senha=1"}>{isLogin ? "Criar conta" : "Entrar"}</a></div>}
   </form>;
 }
 
@@ -217,19 +251,21 @@ function LockedPreview({ kind }: { kind: "videos" | "plugins" }) {
 }
 
 function Account({ user, onReplay }: { user: SessionUser; onReplay: () => Promise<void> }) {
+  const [email, setEmail] = useState(user.email || "");
   const [password, setPassword] = useState("");
   const [saved, setSaved] = useState(user.password_set);
   const [error, setError] = useState("");
   const savePassword = async (event: React.FormEvent) => {
     event.preventDefault(); setError("");
     try {
-      await apiRequest("/auth/password", { method: "POST", body: JSON.stringify({ password }) });
+      await apiRequest("/auth/password", { method: "POST", body: JSON.stringify({ password, ...(!user.email ? { email } : {}) }) });
       setSaved(true); setPassword("");
+      window.location.reload();
     } catch (reason) { setError(reason instanceof ApiError ? reason.message : "Não foi possível salvar a senha."); }
   };
   return <><div className="page-heading"><div><p className="eyebrow">SUA CONTA</p><h1>Perfil</h1><p>Dados usados para acessar a plataforma.</p></div></div>
-    <section className="account-card"><div className="account-avatar">{user.name.split(/\s+/).slice(0,2).map((p) => p[0]).join("").toUpperCase()}</div><div><h2>{user.name}</h2><p>{user.email}</p><span>{user.role === "admin" ? "Administrador" : "Beta gratuita"}</span></div><button className="secondary" onClick={() => void onReplay()}>Refazer tutorial</button></section>
-    {!saved && <form className="account-password" onSubmit={savePassword}><div><p className="eyebrow">PROTEJA SEU ACESSO</p><h2>Crie uma senha para entrar novamente</h2><p>Você veio pelo formulário e já entrou automaticamente. Defina uma senha antes de sair.</p></div><label>Nova senha<input type="password" minLength={10} autoComplete="new-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Pelo menos 10 caracteres" /></label>{error && <div className="auth-error" role="alert">{error}</div>}<button className="primary" type="submit">Salvar senha</button></form>}
+    <section className="account-card"><div className="account-avatar">{user.name.split(/\s+/).slice(0,2).map((p) => p[0]).join("").toUpperCase()}</div><div><h2>{user.name}</h2><p>{user.email || user.whatsapp_phone || "Acesso gratuito"}</p><span>{user.role === "admin" ? "Administrador" : "Beta gratuita"}</span></div><button className="secondary" onClick={() => void onReplay()}>Refazer tutorial</button></section>
+    {!saved && <form className="account-password" onSubmit={savePassword}><div><p className="eyebrow">PROTEJA SEU ACESSO</p><h2>Crie uma senha para entrar novamente</h2><p>Seu acesso está salvo neste navegador. Defina uma senha para recuperar esta mesma conta em outro dispositivo ou depois de sair.</p></div>{!user.email && <label>E-mail<input type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>}<label>Nova senha<input type="password" minLength={10} autoComplete="new-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Pelo menos 10 caracteres" /></label>{error && <div className="auth-error" role="alert">{error}</div>}<button className="primary" type="submit">Salvar senha</button></form>}
   </>;
 }
 

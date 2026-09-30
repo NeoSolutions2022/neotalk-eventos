@@ -32,6 +32,13 @@ class HandoffConsumeIn(BaseModel):
 
 class PasswordSetIn(BaseModel):
     password: str = Field(min_length=10, max_length=128)
+    email: str | None = Field(default=None, min_length=5, max_length=254)
+
+
+class QuickAccessIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    whatsapp_phone: str | None = Field(default=None, min_length=8, max_length=32)
+    source: Literal["platform", "acesso"] = "platform"
 
 
 class OnboardingUpdate(BaseModel):

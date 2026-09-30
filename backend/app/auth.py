@@ -28,13 +28,29 @@ ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
 class CurrentUser:
     id: UUID
     name: str
-    email: str
+    email: str | None
     role: str
     csrf_token: str
     onboarding_version: int
     onboarding_step: int
     onboarding_status: str
     password_set: bool
+    whatsapp_phone: str | None = None
+
+
+def public_access_mode() -> str:
+    return "quick" if os.getenv("PUBLIC_ACCESS_MODE", "password").strip().lower() == "quick" else "password"
+
+
+def normalize_phone(value: str) -> str:
+    if re.search(r"[^0-9+().\s-]", value):
+        raise HTTPException(status_code=422, detail="Informe um WhatsApp válido, com DDD e código do país.")
+    digits = re.sub(r"\D", "", value)
+    if not value.strip().startswith("+") and len(digits) in (10, 11):
+        digits = "55" + digits
+    if not 10 <= len(digits) <= 15 or digits.startswith("0") or len(set(digits)) < 3:
+        raise HTTPException(status_code=422, detail="Informe um WhatsApp válido, com DDD e código do país.")
+    return "+" + digits
 
 
 def normalize_email(value: str) -> str:
@@ -95,7 +111,7 @@ async def current_user(
     row = await pool.fetchrow(
         """
         SELECT u.id,u.name,u.email,u.role,u.status,u.onboarding_version,u.onboarding_step,
-               u.onboarding_status,u.password_set,s.csrf_token
+               u.onboarding_status,u.password_set,u.whatsapp_phone,s.csrf_token
         FROM user_sessions s JOIN users u ON u.id=s.user_id
         WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
         """, token_hash(session),
@@ -132,6 +148,7 @@ def user_payload(user: CurrentUser) -> dict:
         "csrf_token": user.csrf_token, "onboarding_version": user.onboarding_version,
         "onboarding_step": user.onboarding_step, "onboarding_status": user.onboarding_status,
         "password_set": user.password_set,
+        "whatsapp_phone": user.whatsapp_phone,
     }
 
 

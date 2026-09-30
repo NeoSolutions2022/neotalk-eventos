@@ -3,7 +3,8 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:800
 export type SessionUser = {
   id: string;
   name: string;
-  email: string;
+  email: string | null;
+  whatsapp_phone?: string | null;
   role: "user" | "admin";
   csrf_token: string;
   onboarding_version: number;
@@ -65,6 +66,12 @@ export async function consumeLeadAccess(code: string) {
     method: "POST",
     body: JSON.stringify({ code }),
   });
+  setSession(user);
+  return user;
+}
+
+export async function quickAccess(data: { name: string; whatsapp_phone?: string; source?: "platform" | "acesso" }) {
+  const user = await apiRequest<SessionUser>("/auth/quick-access", { method: "POST", body: JSON.stringify(data) });
   setSession(user);
   return user;
 }
