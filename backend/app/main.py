@@ -442,7 +442,7 @@ async def list_quality_runs(limit: int = 20, pool: asyncpg.Pool = Depends(get_po
                quality_ratings.notes AS rating_notes,
                quality_ratings.audio_data IS NOT NULL AS rating_has_audio
         FROM quality_runs
-        LEFT JOIN quality_ratings ON quality_ratings.quality_run_id=quality_runs.id
+        JOIN quality_ratings ON quality_ratings.quality_run_id=quality_runs.id
           AND quality_ratings.output='comparison'
         ORDER BY quality_runs.created_at DESC LIMIT $1
         """,
