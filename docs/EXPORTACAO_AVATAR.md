@@ -1,11 +1,21 @@
-# Exportação experimental do avatar — Qualidade
+# Exportação experimental do avatar — Tradução de vídeos
 
-Depois de executar uma comparação, use **Preparar vídeo** abaixo do avatar.
+Em `/videos`, digite uma frase e selecione **Gerar sinalização**. O agente
+valida as glosas e o widget mostra o avatar. Depois use **Preparar vídeo**.
 O widget se expande para ocupar a janela; maximize o navegador se possível.
 Espere o avatar se ajustar e clique **Gravar vídeo**. Escolha a aba atual na
 solicitação de compartilhamento do navegador.
+A opção **Formato** altera o enquadramento do próprio widget antes da
+captura: horizontal 16:9, Shorts/Reels 9:16, quadrado 1:1 ou retrato 4:5.
+Confira se o corpo e as mãos permanecem visíveis na prévia ampliada. O arquivo
+recebe o formato no nome, por exemplo `neotalk-elia-shorts-xxxxxxxx.webm`.
 A captura é recortada para o widget e salva em WebM, sem áudio nem o restante
 da página. Se o recorte não estiver disponível, a gravação é cancelada.
+
+A página está disponível para contas comuns e administradores. O envio de um
+arquivo de vídeo original ainda não foi implementado: esta etapa cria um vídeo
+do avatar a partir de texto. A aba Qualidade continua dedicada à comparação,
+avaliações e observações de QA.
 
 ## Qualidade
 
@@ -18,6 +28,8 @@ O modo de gravação agora expande o próprio widget, cuja renderização Unity 
 ajustada ao tamanho do canvas. Isso remove o principal limite de resolução do
 painel dividido de QA. **Não garante 4K ou Full HD no arquivo do avatar**;
 o tamanho da janela, a tela e o navegador continuam limitando os detalhes.
+Formatos verticais terão menos pixels horizontais em uma tela horizontal;
+usar uma janela maximizada ajuda a preservar a resolução.
 O navegador pode entregar menos fps ou outra taxa de codificação. O painel
 informa as dimensões/fps reportados pela faixa e a taxa reportada pelo gravador.
 Essa taxa é uma configuração do encoder, não uma medição do bitrate do arquivo.

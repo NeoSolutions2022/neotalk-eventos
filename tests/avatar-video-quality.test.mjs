@@ -5,7 +5,14 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../app/avatarVideoQuality.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
-const { avatarCaptureConstraints, avatarRecorderOptions, captureDetails, videoQualityPresets } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { avatarCaptureConstraints, avatarRecorderOptions, captureDetails, videoFramePresets, videoQualityPresets } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+
+test("frame presets use native social video aspect ratios", () => {
+  assert.equal(videoFramePresets.landscape.ratio, 16 / 9);
+  assert.equal(videoFramePresets.shorts.ratio, 9 / 16);
+  assert.equal(videoFramePresets.square.ratio, 1);
+  assert.equal(videoFramePresets.portrait.ratio, 4 / 5);
+});
 
 test("quality presets explicitly control compression and desired frame rate", () => {
   assert.deepEqual(Object.values(videoQualityPresets).map((p) => p.bitrate), [2500000, 8000000, 16000000]);

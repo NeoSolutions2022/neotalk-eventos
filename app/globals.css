@@ -323,10 +323,22 @@ input:disabled, select:disabled { background: #f3f5f7; color: #7b8797; cursor: n
 .quality-recording-stage { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; gap: 8px; min-height: 0; border: 0; border-radius: 0; padding: 12px; background: #10233f; color: white; }
 .quality-recording-stage .quality-player-title { flex: none; height: auto; min-height: 44px; }
 .quality-recording-stage .quality-player-title b { color: white; }
-.quality-recording-stage .quality-media { flex: 1; min-height: 0; width: 100%; aspect-ratio: auto; }
+.quality-recording-stage .quality-media { flex: none; align-self: center; width: min(100%, calc((100dvh - 180px) * var(--capture-ratio))); max-height: calc(100dvh - 180px); aspect-ratio: var(--capture-ratio); margin: auto; }
 .quality-recording-stage .quality-export { flex: none; padding-top: 4px; }
 .quality-recording-stage .quality-export small { color: #d1e4f3; }
 .quality-recording-stage .quality-export-quality { color: #d1e4f3; }
+.video-studio-grid { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr); gap: 18px; align-items: start; }
+.video-studio-card { min-width: 0; background: white; border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.video-studio-card h2 { margin: 10px 0 20px; font-size: 20px; }
+.video-studio-card > label { display: grid; gap: 8px; font-size: 12px; font-weight: 650; }
+.video-studio-card > label textarea { width: 100%; min-height: 145px; resize: vertical; border: 1px solid var(--line); border-radius: 9px; padding: 12px; font: inherit; line-height: 1.5; }
+.video-studio-card > .primary { margin: 14px 0; }
+.video-studio-card .gloss-result { margin-top: 16px; }
+.video-studio-note { margin-top: 20px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.video-export-player .quality-media { margin-top: 12px; }
+.video-export-player.quality-recording-stage { background: #10233f; border: 0; border-radius: 0; }
+.video-export-player.quality-recording-stage .quality-media { margin: auto; }
+@media (max-width: 900px) { .video-studio-grid { grid-template-columns: 1fr; } }
 .media-empty { width: 100%; height: 100%; display: grid; place-items: center; align-content: center; color: #8ea0b8; text-align: center; gap: 8px; }
 .media-empty span { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid #40516a; border-radius: 50%; color: var(--cyan); }
 .media-empty p { max-width: 240px; font-size: 9px; line-height: 1.5; }

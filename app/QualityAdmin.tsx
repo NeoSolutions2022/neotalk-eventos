@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isNonBlockingAvatarError } from "./avatarMessages";
 import { API_BASE, ApiError, apiRequest } from "./apiClient";
-import { avatarCaptureConstraints, avatarRecorderOptions, captureDetails, VideoQuality, videoQualityPresets } from "./avatarVideoQuality";
 
 type Prompt = { id: string; name: string; instructions: string; version: number; is_active: boolean; created_at: string };
 type AvatarId = "lia" | "asuna" | "elia";
@@ -36,23 +35,6 @@ type QualityRating = {
   audio_mime_type?: string;
   audio_duration_ms?: number;
 };
-type CroppableVideoTrack = MediaStreamTrack & { cropTo?: (target: unknown) => Promise<void> };
-type VideoCapture = {
-  stream: MediaStream;
-  recorder: MediaRecorder;
-  chunks: Blob[];
-  phrase: string;
-  runId: string;
-  avatar: AvatarId;
-  started: boolean;
-  timer: number | null;
-  details: string;
-};
-
-function safeVideoName(avatar: AvatarId, runId: string): string {
-  return `neotalk-${avatar}-${runId.slice(0, 8)}.webm`;
-}
-
 const widgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 
@@ -63,7 +45,6 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 export default function QualityAdmin({ showToast }: { showToast: (message: string) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const videoCaptureRef = useRef<VideoCapture | null>(null);
   const recorderStreamRef = useRef<MediaStream | null>(null);
   const recorderChunksRef = useRef<Blob[]>([]);
   const audioObjectUrlRef = useRef("");
@@ -93,10 +74,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [recording, setRecording] = useState(false);
   const [savingReview, setSavingReview] = useState(false);
   const [hasSavedAudio, setHasSavedAudio] = useState(false);
-  const [capturingVideo, setCapturingVideo] = useState(false);
-  const [captureStageOpen, setCaptureStageOpen] = useState(false);
-  const [videoCaptureStatus, setVideoCaptureStatus] = useState("Exportação experimental · selecione esta aba ao compartilhar.");
-  const [videoQuality, setVideoQuality] = useState<VideoQuality>("high");
   const widgetUrl = `${widgetBase}?avatar=elia&loop=0&background=%2310233f`;
   const widgetOrigin = new URL(widgetBase).origin;
 
@@ -112,30 +89,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     recorderRef.current = null;
   };
 
-  const releaseVideoCapture = useCallback((capture: VideoCapture) => {
-    if (capture.timer !== null) window.clearTimeout(capture.timer);
-    capture.stream.getTracks().forEach((track) => track.stop());
-    if (videoCaptureRef.current === capture) videoCaptureRef.current = null;
-    setCapturingVideo(false);
-    setCaptureStageOpen(false);
-  }, []);
-
-  const stopVideoCapture = useCallback(() => {
-    const capture = videoCaptureRef.current;
-    if (!capture) return;
-    if (capture.recorder.state === "recording") capture.recorder.stop();
-    else releaseVideoCapture(capture);
-  }, [releaseVideoCapture]);
-
-  const discardVideoCapture = () => {
-    const capture = videoCaptureRef.current;
-    if (!capture) return;
-    capture.recorder.onstop = null;
-    if (capture.recorder.state === "recording") capture.recorder.stop();
-    releaseVideoCapture(capture);
-    setVideoCaptureStatus("");
-  };
-
   useEffect(() => {
     return () => {
       if (recorderRef.current?.state === "recording") {
@@ -144,14 +97,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       }
       releaseRecorder();
       if (audioObjectUrlRef.current) URL.revokeObjectURL(audioObjectUrlRef.current);
-      const videoCapture = videoCaptureRef.current;
-      if (videoCapture) {
-        videoCapture.recorder.onstop = null;
-        if (videoCapture.recorder.state === "recording") videoCapture.recorder.stop();
-        if (videoCapture.timer !== null) window.clearTimeout(videoCapture.timer);
-        videoCapture.stream.getTracks().forEach((track) => track.stop());
-        videoCaptureRef.current = null;
-      }
     };
   }, []);
 
@@ -225,16 +170,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
         setAvatarStatus(`${avatarNames[avatar]} sinalizando em loop`);
         clearAvatarLoop();
         const wordCount = Array.isArray(data.words) ? data.words.length : latestGlossRef.current.split(/\s+/).filter(Boolean).length;
-        const capture = videoCaptureRef.current;
-        if (capture && !capture.started && capture.runId === run?.id && capture.avatar === avatar) {
-          capture.started = true;
-          if (capture.timer !== null) window.clearTimeout(capture.timer);
-          capture.recorder.start(250);
-          setVideoCaptureStatus(`Gravando · ${capture.details}`);
-          capture.timer = window.setTimeout(stopVideoCapture, Math.max(4500, Math.min(60000, wordCount * 1600 + 1500)));
-          return;
-        }
-        if (capture) return;
         avatarLoopTimerRef.current = window.setTimeout(() => {
           const gloss = latestGlossRef.current;
           if (!gloss || !frameRef.current?.contentWindow) return;
@@ -251,7 +186,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [avatar, run?.id, stopVideoCapture, widgetOrigin]);
+  }, [avatar, widgetOrigin]);
 
   useEffect(() => {
     if (!avatarReady || !frameRef.current?.contentWindow) return;
@@ -322,7 +257,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   };
 
   const executeTest = async () => {
-    discardVideoCapture();
     setRunning(true);
     clearAvatarLoop();
     latestGlossRef.current = "";
@@ -440,7 +374,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   };
 
   const openHistoryRun = (item: QualityRun) => {
-    discardVideoCapture();
     if (recorderRef.current?.state === "recording") {
       recorderRef.current.onstop = null;
       recorderRef.current.stop();
@@ -457,96 +390,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     setHasSavedAudio(false);
     setError("");
     setRun(item);
-  };
-
-  const captureAvatarVideo = async () => {
-    if (capturingVideo || !captureStageOpen || !run?.gloss_text || !avatarReady || !frameRef.current?.contentWindow) return;
-    const frameBounds = frameRef.current.getBoundingClientRect();
-    if (frameBounds.width < 640 || frameBounds.height < 480) {
-      setError("A área de gravação está pequena. Maximize o navegador e tente novamente.");
-      return;
-    }
-    setCapturingVideo(true);
-    setError("");
-    setVideoCaptureStatus("Selecione esta aba na janela de compartilhamento.");
-    let stream: MediaStream | null = null;
-    try {
-      const cropTargetApi = (window as Window & {
-        CropTarget?: { fromElement: (element: Element) => Promise<unknown> };
-      }).CropTarget;
-      if (!navigator.mediaDevices?.getDisplayMedia || !cropTargetApi?.fromElement || typeof MediaRecorder === "undefined") {
-        throw new Error("A gravação do avatar precisa de Chrome, Edge ou Brave atualizado no computador.");
-      }
-      const mimeType = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]
-        .find((type) => MediaRecorder.isTypeSupported(type));
-      if (!mimeType) throw new Error("Este navegador não consegue gravar vídeo WebM.");
-      const target = await cropTargetApi.fromElement(frameRef.current);
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: avatarCaptureConstraints(videoQuality),
-        audio: false,
-        preferCurrentTab: true,
-        selfBrowserSurface: "include",
-      } as DisplayMediaStreamOptions);
-      const track = stream.getVideoTracks()[0] as CroppableVideoTrack | undefined;
-      if (!track?.cropTo) throw new Error("Selecione esta aba do navegador para gravar somente o avatar.");
-      await track.cropTo(target);
-      track.contentHint = "motion";
-      const recorder = new MediaRecorder(stream, avatarRecorderOptions(videoQuality, mimeType));
-      const capture: VideoCapture = {
-        stream,
-        recorder,
-        details: captureDetails(track.getSettings(), recorder.videoBitsPerSecond),
-        chunks: [],
-        phrase: run.gloss_text,
-        runId: run.id,
-        avatar,
-        started: false,
-        timer: null,
-      };
-      videoCaptureRef.current = capture;
-      capture.recorder.ondataavailable = (event) => {
-        if (event.data.size) capture.chunks.push(event.data);
-      };
-      capture.recorder.onerror = () => {
-        setError("A gravação do avatar foi interrompida.");
-        releaseVideoCapture(capture);
-      };
-      capture.recorder.onstop = () => {
-        if (capture.chunks.length) {
-          const blob = new Blob(capture.chunks, { type: mimeType });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = safeVideoName(capture.avatar, capture.runId);
-          link.click();
-          window.setTimeout(() => URL.revokeObjectURL(url), 60000);
-          showToast("Vídeo do avatar baixado");
-        }
-        releaseVideoCapture(capture);
-        setVideoCaptureStatus(`Vídeo salvo · ${capture.details}`);
-        if (latestGlossRef.current === capture.phrase) {
-          frameRef.current?.contentWindow?.postMessage({ type: "neotalk:sign", phrase: capture.phrase }, widgetOrigin);
-        }
-      };
-      track.addEventListener("ended", () => {
-        if (capture.recorder.state === "recording") capture.recorder.stop();
-        else releaseVideoCapture(capture);
-      }, { once: true });
-      clearAvatarLoop();
-      setCapturingVideo(true);
-      setVideoCaptureStatus("Preparando a sinalização…");
-      capture.timer = window.setTimeout(() => {
-        setError("O avatar não iniciou a sinalização a tempo. Tente novamente.");
-        releaseVideoCapture(capture);
-      }, 20000);
-      frameRef.current.contentWindow.postMessage({ type: "neotalk:sign", phrase: capture.phrase }, widgetOrigin);
-    } catch (reason) {
-      stream?.getTracks().forEach((track) => track.stop());
-      setCapturingVideo(false);
-      setVideoCaptureStatus("Gravação não iniciada. Tente novamente ou feche a visualização ampliada.");
-      if (reason instanceof DOMException && reason.name === "NotAllowedError") return;
-      setError(reason instanceof Error ? reason.message : "Não foi possível gravar o avatar.");
-    }
   };
 
   return <>
@@ -568,21 +411,9 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       <div className="quality-main">
         <div className="compare-grid">
           <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Reprodução em loop" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay loop><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
-          <article className={`quality-player quality-avatar-player${captureStageOpen ? " quality-recording-stage" : ""}`}>
-            <div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)} disabled={capturingVideo}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div>
+          <article className="quality-player quality-avatar-player">
+            <div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div>
             <div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div>
-            <div className="quality-export">
-              <label className="quality-export-quality">Qualidade do vídeo
-                <select value={videoQuality} disabled={capturingVideo} onChange={(event) => setVideoQuality(event.target.value as VideoQuality)}>
-                  {Object.entries(videoQualityPresets).map(([id, preset]) => <option key={id} value={id}>{preset.label} · {preset.bitrate / 1_000_000} Mbps</option>)}
-                </select>
-              </label>
-              {!captureStageOpen && <button className="secondary" onClick={() => setCaptureStageOpen(true)} disabled={!run?.gloss_text || !avatarReady}>Preparar vídeo de {avatarNames[avatar]}</button>}
-              {captureStageOpen && !capturingVideo && <button className="primary" onClick={() => void captureAvatarVideo()}>Gravar vídeo</button>}
-              {captureStageOpen && <button className="secondary" onClick={() => capturingVideo ? stopVideoCapture() : setCaptureStageOpen(false)}>{capturingVideo ? "Encerrar gravação" : "Voltar ao QA"}</button>}
-              <small className="quality-export-hint">Experimental · {captureStageOpen ? "Maximize a janela e escolha esta aba ao compartilhar." : videoQualityPresets[videoQuality].description + ". A gravação abre o avatar em tamanho maior."}</small>
-              {videoCaptureStatus && <small role="status">{videoCaptureStatus}</small>}
-            </div>
           </article>
         </div>
         <section className="quality-review">

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
+import VideoStudio from "./VideoStudio";
 import { isNonBlockingAvatarError } from "./avatarMessages";
 import { ApiError, SessionUser, apiRequest, authenticate, consumeLeadAccess, loadSession, quickAccess, setSession } from "./apiClient";
 
@@ -15,7 +16,7 @@ const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia
 
 const baseNav = [
   { id: "instances" as View, icon: "broadcast" as IconName, label: "Salas ao vivo", href: "/salas" },
-  { id: "videos" as View, icon: "video" as IconName, label: "Tradução de vídeos", href: "/videos", locked: true },
+  { id: "videos" as View, icon: "video" as IconName, label: "Tradução de vídeos", href: "/videos" },
   { id: "plugins" as View, icon: "plugin" as IconName, label: "Plugins", href: "/plugins", locked: true },
 ];
 
@@ -142,8 +143,9 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           {view === "packages" && <Packages onBuy={() => goTo("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
           {view === "quality" && <QualityAdmin showToast={showToast} />}
+          {view === "videos" && <VideoStudio showToast={showToast} />}
           {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} showToast={showToast} diagnostics={user.role === "admin"} />}
-          {(view === "videos" || view === "plugins") && <LockedPreview kind={view} />}
+          {view === "plugins" && <LockedPreview />}
           {view === "account" && <Account user={user} onReplay={async () => {
             await apiRequest("/auth/onboarding", { method: "PATCH", body: JSON.stringify({ step: 0, status: "pending" }) });
             setUser({ ...user, onboarding_version: 0, onboarding_step: 0, onboarding_status: "pending" });
@@ -239,13 +241,12 @@ function LeadAccess() {
   return <main className="session-loading"><Logo dark /><span>{message}</span></main>;
 }
 
-function LockedPreview({ kind }: { kind: "videos" | "plugins" }) {
-  const video = kind === "videos";
+function LockedPreview() {
   return <section className="locked-preview">
     <span className="locked-kicker">EM BREVE</span>
-    <div className="locked-icon"><Icon name={video ? "video" : "plugin"} /></div>
-    <h1>{video ? "Tradução de vídeos" : "Plugins e integrações"}</h1>
-    <p>{video ? "Envie um vídeo e receba uma versão acessível com Libras e legendas." : "Conecte a NeoTalk ao OBS, reuniões e plataformas de transmissão."}</p>
+    <div className="locked-icon"><Icon name="plugin" /></div>
+    <h1>Plugins e integrações</h1>
+    <p>Conecte a NeoTalk ao OBS, reuniões e plataformas de transmissão.</p>
     <span className="locked-badge">🔒 Disponível em uma próxima versão</span>
   </section>;
 }

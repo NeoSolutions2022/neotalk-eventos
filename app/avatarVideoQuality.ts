@@ -6,6 +6,15 @@ export const videoQualityPresets = {
 
 export type VideoQuality = keyof typeof videoQualityPresets;
 
+export const videoFramePresets = {
+  landscape: { label: "Horizontal · 16:9", ratio: 16 / 9, minWidth: 640, minHeight: 360 },
+  shorts: { label: "Shorts / Reels · 9:16", ratio: 9 / 16, minWidth: 300, minHeight: 530 },
+  square: { label: "Quadrado · 1:1", ratio: 1, minWidth: 480, minHeight: 480 },
+  portrait: { label: "Retrato · 4:5", ratio: 4 / 5, minWidth: 400, minHeight: 500 },
+} as const;
+
+export type VideoFrameFormat = keyof typeof videoFramePresets;
+
 export function avatarCaptureConstraints(quality: VideoQuality): MediaTrackConstraints {
   // Keep the tab's native detail, rather than requesting a small, downscaled
   // stream. Region Capture subsequently restricts output to the avatar iframe.
