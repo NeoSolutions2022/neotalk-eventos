@@ -1,7 +1,9 @@
 # Exportação experimental do avatar — Qualidade
 
-Depois de executar uma comparação, use **Baixar vídeo** abaixo do avatar.
-Escolha a aba atual na solicitação de compartilhamento do navegador.
+Depois de executar uma comparação, use **Preparar vídeo** abaixo do avatar.
+O widget se expande para ocupar a janela; maximize o navegador se possível.
+Espere o avatar se ajustar e clique **Gravar vídeo**. Escolha a aba atual na
+solicitação de compartilhamento do navegador.
 A captura é recortada para o widget e salva em WebM, sem áudio nem o restante
 da página. Se o recorte não estiver disponível, a gravação é cancelada.
 
@@ -11,9 +13,11 @@ da página. Se o recorte não estiver disponível, a gravação é cancelada.
 - **Alta (padrão):** 8 Mbps, até 30 fps, menos compressão.
 - **Máxima:** 16 Mbps, até 60 fps, maior uso de processamento e arquivo maior.
 
-A captura pede até 3840 × 2160 para evitar reduzir a aba antes de recortar;
-isso **não garante 4K ou Full HD no arquivo do avatar**. O widget ocupa apenas
-parte da aba e sua resolução de renderização também limita os detalhes.
+A captura pede até 3840 × 2160 para evitar reduzir a aba antes de recortar.
+O modo de gravação agora expande o próprio widget, cuja renderização Unity é
+ajustada ao tamanho do canvas. Isso remove o principal limite de resolução do
+painel dividido de QA. **Não garante 4K ou Full HD no arquivo do avatar**;
+o tamanho da janela, a tela e o navegador continuam limitando os detalhes.
 O navegador pode entregar menos fps ou outra taxa de codificação. O painel
 informa as dimensões/fps reportados pela faixa e a taxa reportada pelo gravador.
 Essa taxa é uma configuração do encoder, não uma medição do bitrate do arquivo.

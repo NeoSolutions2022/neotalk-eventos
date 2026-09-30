@@ -94,6 +94,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [savingReview, setSavingReview] = useState(false);
   const [hasSavedAudio, setHasSavedAudio] = useState(false);
   const [capturingVideo, setCapturingVideo] = useState(false);
+  const [captureStageOpen, setCaptureStageOpen] = useState(false);
   const [videoCaptureStatus, setVideoCaptureStatus] = useState("Exportação experimental · selecione esta aba ao compartilhar.");
   const [videoQuality, setVideoQuality] = useState<VideoQuality>("high");
   const widgetUrl = `${widgetBase}?avatar=elia&loop=0&background=%2310233f`;
@@ -116,6 +117,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     capture.stream.getTracks().forEach((track) => track.stop());
     if (videoCaptureRef.current === capture) videoCaptureRef.current = null;
     setCapturingVideo(false);
+    setCaptureStageOpen(false);
   }, []);
 
   const stopVideoCapture = useCallback(() => {
@@ -458,7 +460,12 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   };
 
   const captureAvatarVideo = async () => {
-    if (capturingVideo || !run?.gloss_text || !avatarReady || !frameRef.current?.contentWindow) return;
+    if (capturingVideo || !captureStageOpen || !run?.gloss_text || !avatarReady || !frameRef.current?.contentWindow) return;
+    const frameBounds = frameRef.current.getBoundingClientRect();
+    if (frameBounds.width < 640 || frameBounds.height < 480) {
+      setError("A área de gravação está pequena. Maximize o navegador e tente novamente.");
+      return;
+    }
     setCapturingVideo(true);
     setError("");
     setVideoCaptureStatus("Selecione esta aba na janela de compartilhamento.");
@@ -536,7 +543,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     } catch (reason) {
       stream?.getTracks().forEach((track) => track.stop());
       setCapturingVideo(false);
-      setVideoCaptureStatus("");
+      setVideoCaptureStatus("Gravação não iniciada. Tente novamente ou feche a visualização ampliada.");
       if (reason instanceof DOMException && reason.name === "NotAllowedError") return;
       setError(reason instanceof Error ? reason.message : "Não foi possível gravar o avatar.");
     }
@@ -561,7 +568,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       <div className="quality-main">
         <div className="compare-grid">
           <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Reprodução em loop" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay loop><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
-          <article className="quality-player">
+          <article className={`quality-player quality-avatar-player${captureStageOpen ? " quality-recording-stage" : ""}`}>
             <div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)} disabled={capturingVideo}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div>
             <div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div>
             <div className="quality-export">
@@ -570,9 +577,10 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
                   {Object.entries(videoQualityPresets).map(([id, preset]) => <option key={id} value={id}>{preset.label} · {preset.bitrate / 1_000_000} Mbps</option>)}
                 </select>
               </label>
-              <button className="secondary" onClick={() => void captureAvatarVideo()} disabled={!run?.gloss_text || !avatarReady || capturingVideo}>Baixar vídeo de {avatarNames[avatar]}</button>
-              {capturingVideo && <button className="secondary" onClick={stopVideoCapture}>Encerrar gravação</button>}
-              <small className="quality-export-hint">Experimental · {videoQualityPresets[videoQuality].description}. Resolução limitada pelo widget e pelo navegador.</small>
+              {!captureStageOpen && <button className="secondary" onClick={() => setCaptureStageOpen(true)} disabled={!run?.gloss_text || !avatarReady}>Preparar vídeo de {avatarNames[avatar]}</button>}
+              {captureStageOpen && !capturingVideo && <button className="primary" onClick={() => void captureAvatarVideo()}>Gravar vídeo</button>}
+              {captureStageOpen && <button className="secondary" onClick={() => capturingVideo ? stopVideoCapture() : setCaptureStageOpen(false)}>{capturingVideo ? "Encerrar gravação" : "Voltar ao QA"}</button>}
+              <small className="quality-export-hint">Experimental · {captureStageOpen ? "Maximize a janela e escolha esta aba ao compartilhar." : videoQualityPresets[videoQuality].description + ". A gravação abre o avatar em tamanho maior."}</small>
               {videoCaptureStatus && <small role="status">{videoCaptureStatus}</small>}
             </div>
           </article>
