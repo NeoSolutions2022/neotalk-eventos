@@ -36,7 +36,7 @@ test("serves every primary product route directly", async () => {
 });
 
 test("keeps live capture, agent, quality lab, persistence and Docker services connected", async () => {
-  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth, proxy] = await Promise.all([
+  const [liveRoom, quality, rooms, compose, api, services, avatarMessages, apiClient, auth, proxy, liveTiming] = await Promise.all([
     readFile(new URL("../app/LiveRoom.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/QualityAdmin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/Rooms.tsx", import.meta.url), "utf8"),
@@ -47,6 +47,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
     readFile(new URL("../app/apiClient.ts", import.meta.url), "utf8"),
     readFile(new URL("../backend/app/auth.py", import.meta.url), "utf8"),
     readFile(new URL("../app/api/v1/[...path]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/liveTiming.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
@@ -54,10 +55,11 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
   assert.match(liveRoom, /className="live-captions"/);
   assert.match(liveRoom, /window\.location\.href = "\/salas"/);
-  assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS = 500/);
+  assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS/);
+  assert.match(liveTiming, /LIVE_BATCH_SILENCE_MS = 320/);
   assert.match(liveRoom, /batchTimerRef\.current = window\.setTimeout\(\(\) => flushWordBuffer\(true\), delay\)/);
   assert.match(liveRoom, /playbackDurationMs\(latestPoseRef\.current\?\.pose, wordCount\)/);
-  assert.match(liveRoom, /Number\.isFinite\(frameCount\)/);
+  assert.match(liveTiming, /Number\.isFinite\(frameCount\)/);
   assert.match(liveRoom, /recognition\.lang = "pt-BR"/);
   assert.match(services, /"language": "pt"/);
   assert.match(liveRoom, /LIVE_AGENT_CONCURRENCY = 2/);

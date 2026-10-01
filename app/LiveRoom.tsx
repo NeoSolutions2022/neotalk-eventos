@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessages";
 import { ApiError, apiRequest } from "./apiClient";
+import { LIVE_BATCH_PUNCTUATION_MS, LIVE_BATCH_SILENCE_MS, LIVE_IDLE_LOOP_GAP_MS, playbackDurationMs } from "./liveTiming";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -34,10 +35,8 @@ const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://i
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
 const LIVE_BATCH_MIN_WORDS = 2;
 const LIVE_BATCH_MAX_WORDS = 12;
-const LIVE_BATCH_SILENCE_MS = 500;
 const LIVE_AGENT_CONCURRENCY = 2;
 const LIVE_IDLE_LOOP_DELAY_MS = 2200;
-const LIVE_IDLE_LOOP_GAP_MS = 320;
 const LIVE_API_RETRY_DELAYS_MS = [350, 800];
 const LIVE_AVATAR_RETRY_DELAY_MS = 2500;
 const LIVE_AVATAR_MAX_RETRIES = 2;
@@ -49,15 +48,6 @@ const LIVE_TRANSCRIPTION_BACKLOG = 6;
 const LIVE_HEARTBEAT_INTERVAL_MS = 25000;
 const LIVE_HEARTBEAT_RETRY_MS = 5000;
 const poseKey = (phrase: string) => phrase.replace(/\s+/g, " ").trim().toUpperCase();
-
-function playbackDurationMs(pose: SharedPose["pose"] | undefined, wordCount: number): number {
-  const frameCount = pose?.frame_count ?? 0;
-  const fps = pose?.fps ?? 0;
-  if (Number.isFinite(frameCount) && Number.isFinite(fps) && frameCount > 0 && fps > 0) {
-    return Math.ceil((frameCount / fps) * 1000) + 300;
-  }
-  return Math.max(3500, wordCount * 1300);
-}
 
 async function roomApi<T>(path: string, options?: RequestInit): Promise<T> {
   return apiRequest<T>(path, options);
@@ -445,10 +435,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     avatarCommandAcknowledgedRef.current = false;
     refreshBatchView();
     if (status === "done") {
-      window.setTimeout(() => {
-        dispatchNextBatch();
-        scheduleIdleLoop();
-      }, 100);
+      dispatchNextBatch();
+      scheduleIdleLoop();
     }
   };
 
@@ -472,10 +460,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     activeBatchRef.current = null;
     avatarBusyRef.current = false;
     refreshBatchView();
-    window.setTimeout(() => {
-      dispatchNextBatch();
-      scheduleIdleLoop();
-    }, 100);
+    dispatchNextBatch();
+    scheduleIdleLoop();
   };
 
   const retryCurrentAvatarPhrase = () => {
@@ -573,7 +559,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       enqueueBatch(wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS).join(" "));
     }
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
-    const delay = /[.!?;:]$/.test(text.trim()) ? 180 : LIVE_BATCH_SILENCE_MS;
+    const delay = /[.!?;:]$/.test(text.trim()) ? LIVE_BATCH_PUNCTUATION_MS : LIVE_BATCH_SILENCE_MS;
     batchTimerRef.current = window.setTimeout(() => flushWordBuffer(true), delay);
   };
 
