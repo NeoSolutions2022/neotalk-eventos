@@ -8,6 +8,7 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, 
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import expire_stale_rooms, get_pool, lifespan
+from .dataset_pdf import build_dataset_pdf
 from .auth import (
     COOKIE_NAME, CurrentUser, admin_csrf, admin_user, create_session, csrf_user,
     current_user, enforce_rate_limit, hash_password, normalize_email, normalize_phone,
@@ -361,6 +362,18 @@ async def list_pose_words(search: str = "", page: int = 1, page_size: int = 100,
     )
     pages = max(1, (total + safe_size - 1) // safe_size)
     return {"items": [row["word"] for row in rows], "page": safe_page, "page_size": safe_size, "total": total, "pages": pages, "has_next": safe_page < pages}
+
+
+@app.get("/api/v1/admin/pose-words/pdf")
+async def download_pose_words_pdf(pool: asyncpg.Pool = Depends(get_pool), _: CurrentUser = Depends(admin_user)) -> Response:
+    rows = await pool.fetch("SELECT word FROM pose_words ORDER BY word")
+    synced_at = await pool.fetchval("SELECT synced_at FROM dataset_snapshots ORDER BY synced_at DESC LIMIT 1")
+    content = build_dataset_pdf([row["word"] for row in rows], synced_at)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="neotalk-dataset-pose.pdf"', "Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/v1/agent/translate")

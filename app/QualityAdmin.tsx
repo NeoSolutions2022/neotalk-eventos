@@ -58,6 +58,12 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [words, setWords] = useState<string[]>([]);
   const [history, setHistory] = useState<QualityRun[]>([]);
   const [wordSearch, setWordSearch] = useState("");
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogWords, setCatalogWords] = useState<string[]>([]);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const [downloadingCatalog, setDownloadingCatalog] = useState(false);
   const [phrase, setPhrase] = useState("Você é muito bonito e sua casa tem uma parede de barro.");
   const [run, setRun] = useState<QualityRun | null>(null);
   const [running, setRunning] = useState(false);
@@ -76,6 +82,15 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [hasSavedAudio, setHasSavedAudio] = useState(false);
   const widgetUrl = `${widgetBase}?avatar=elia&loop=0&background=%2310233f`;
   const widgetOrigin = new URL(widgetBase).origin;
+
+  useEffect(() => {
+    if (!catalogOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCatalogOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [catalogOpen]);
 
   useEffect(() => {
     latestGlossRef.current = run?.gloss_text || "";
@@ -235,10 +250,60 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       const result = await api<{ word_count: number }>("/admin/dataset/sync", { method: "POST" });
       showToast(`${result.word_count} palavras sincronizadas`);
       await loadAdmin();
+      if (catalogOpen) await loadCatalog();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Falha ao sincronizar catálogo");
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const loadCatalog = async () => {
+    setCatalogLoading(true);
+    setCatalogError("");
+    try {
+      const all: string[] = [];
+      let page = 1;
+      let hasNext = true;
+      while (hasNext) {
+        const result = await api<{ items: string[]; has_next: boolean }>(`/admin/pose-words?page=${page}&page_size=500`);
+        all.push(...result.items);
+        hasNext = result.has_next;
+        page += 1;
+      }
+      setCatalogWords(all);
+    } catch (reason) {
+      setCatalogError(reason instanceof Error ? reason.message : "Não foi possível carregar o catálogo.");
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  const openCatalog = () => {
+    setCatalogOpen(true);
+    void loadCatalog();
+  };
+
+  const downloadCatalogPdf = async () => {
+    setDownloadingCatalog(true);
+    setCatalogError("");
+    try {
+      const response = await fetch(`${API_BASE}/admin/pose-words/pdf`, { credentials: "include" });
+      if (!response.ok) throw new Error(`Falha ao gerar PDF (${response.status}).`);
+      const blob = await response.blob();
+      if (!blob.size || !blob.type.includes("pdf")) throw new Error("A API não retornou um PDF válido.");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "neotalk-dataset-pose.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (reason) {
+      setCatalogError(reason instanceof Error ? reason.message : "Não foi possível baixar o PDF.");
+    } finally {
+      setDownloadingCatalog(false);
     }
   };
 
@@ -434,8 +499,17 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
       <aside className="quality-sidebar">
         <section><div className="quality-section-title"><div><b>Histórico de QA</b><small>Avaliações salvas mais recentes.</small></div><span>{history.length}</span></div><div className="quality-history">{history.length === 0 && <p className="quality-history-empty">Nenhuma avaliação salva ainda.</p>}{history.map((item) => <button key={item.id} className={run?.id === item.id ? "active" : ""} onClick={() => openHistoryRun(item)}><div><b>{item.source_text}</b><small>{new Date(item.created_at).toLocaleString("pt-BR")}</small></div><span>{item.rating_score} ★{item.rating_has_audio ? " · áudio" : item.rating_notes ? " · nota" : ""}</span></button>)}</div></section>
         <section><div className="quality-section-title"><div><b>Prompt do agente</b><small>Editar cria e ativa uma nova versão.</small></div><span>v{integrations?.active_prompt?.version || "—"}</span></div><textarea rows={13} value={instructions} onChange={(event) => setInstructions(event.target.value)} /><button className="secondary wide" onClick={savePrompt} disabled={instructions.trim().length < 20}>Salvar e ativar versão</button><div className="prompt-history">{prompts.slice(0, 4).map((prompt) => <span key={prompt.id} className={prompt.is_active ? "active" : ""}>v{prompt.version} · {prompt.is_active ? "ativa" : new Date(prompt.created_at).toLocaleDateString("pt-BR")}</span>)}</div></section>
-        <section><div className="quality-section-title"><div><b>Dataset .pose</b><small>Palavras autorizadas para o agente.</small></div><button className="link" onClick={syncDataset} disabled={syncing}>{syncing ? "Sincronizando…" : "Sincronizar"}</button></div><input placeholder="Buscar palavra" value={wordSearch} onChange={(event) => setWordSearch(event.target.value)} /><div className="word-cloud">{words.map((word) => <span key={word}>{word}</span>)}</div></section>
+        <section><div className="quality-section-title"><div><b>Dataset .pose</b><small>{integrations?.dataset_words || 0} palavras autorizadas para o agente.</small></div><button className="link" onClick={syncDataset} disabled={syncing}>{syncing ? "Sincronizando…" : "Sincronizar"}</button></div><input placeholder="Buscar palavra" value={wordSearch} onChange={(event) => setWordSearch(event.target.value)} /><div className="word-cloud">{words.map((word) => <span key={word}>{word}</span>)}</div><button className="secondary wide quality-catalog-open" type="button" onClick={openCatalog}>Abrir catálogo completo e baixar PDF</button></section>
       </aside>
     </div>
+    {catalogOpen && <div className="quality-catalog-overlay">
+      <button className="quality-catalog-backdrop" type="button" aria-label="Fechar catálogo" onClick={() => setCatalogOpen(false)} />
+      <section className="quality-catalog-dialog" role="dialog" aria-modal="true" aria-labelledby="quality-catalog-title">
+        <div className="quality-catalog-heading"><div><p className="eyebrow">DATASET SINCRONIZADO</p><h2 id="quality-catalog-title">Catálogo de sinais .pose</h2><p>{catalogLoading ? "Carregando palavras…" : `${catalogWords.length} palavras disponíveis para o agente`}</p></div><button type="button" className="quality-catalog-close" aria-label="Fechar catálogo" onClick={() => setCatalogOpen(false)}>×</button></div>
+        <div className="quality-catalog-actions"><input aria-label="Buscar no catálogo completo" placeholder="Buscar palavra" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} /><button className="primary" type="button" onClick={() => void downloadCatalogPdf()} disabled={downloadingCatalog}>{downloadingCatalog ? "Gerando PDF…" : "Baixar PDF completo"}</button></div>
+        {catalogError && <p className="quality-error" role="alert">{catalogError}</p>}
+        <div className="quality-catalog-list">{catalogWords.filter((word) => word.toLocaleLowerCase("pt-BR").includes(catalogSearch.trim().toLocaleLowerCase("pt-BR"))).map((word) => <span key={word}>{word}</span>)}{!catalogLoading && !catalogWords.length && !catalogError && <p>O dataset ainda está vazio. Sincronize-o para listar as palavras.</p>}</div>
+      </section>
+    </div>}
   </>;
 }
