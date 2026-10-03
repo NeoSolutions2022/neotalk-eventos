@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessages";
 import { ApiError, apiRequest } from "./apiClient";
-import { LIVE_BATCH_PUNCTUATION_MS, LIVE_BATCH_SILENCE_MS, LIVE_IDLE_LOOP_GAP_MS, playbackDurationMs } from "./liveTiming";
+import { batchFlushDelayMs, LIVE_IDLE_LOOP_GAP_MS, matchesActivePhrase, playbackDurationMs } from "./liveTiming";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -40,8 +40,10 @@ const LIVE_IDLE_LOOP_DELAY_MS = 2200;
 const LIVE_API_RETRY_DELAYS_MS = [350, 800];
 const LIVE_AVATAR_RETRY_DELAY_MS = 2500;
 const LIVE_AVATAR_MAX_RETRIES = 2;
-const LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 75000;
-const LIVE_AVATAR_MAX_RECOVERIES = 2;
+// O widget comunica progresso durante o polling; silêncio prolongado indica travamento.
+const LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 20000;
+const LIVE_AVATAR_POSE_LOAD_TIMEOUT_MS = 35000;
+const LIVE_AVATAR_MAX_RECOVERIES = 1;
 const LIVE_FALLBACK_CHUNK_MS = 3200;
 const LIVE_TRANSCRIPTION_CONCURRENCY = 2;
 const LIVE_TRANSCRIPTION_BACKLOG = 6;
@@ -116,7 +118,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const avatarProcessingTimerRef = useRef<number | null>(null);
   const avatarRetryCountRef = useRef(0);
   const avatarRecoveryCountRef = useRef(0);
-  const avatarWidgetReloadCountRef = useRef(0);
   const avatarCommandAcknowledgedRef = useRef(false);
   const avatarPlaybackStartedRef = useRef(false);
   const wordBufferRef = useRef<string[]>([]);
@@ -296,7 +297,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
     avatarRecoveryCountRef.current = 0;
-    avatarWidgetReloadCountRef.current = 0;
     avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     setAvatarError("");
@@ -311,7 +311,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     clearIdleLoopTimer();
     if (!listeningRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length || !recentPhrasesRef.current.length) return;
     // Executado apenas pelo timer/evento de reprodução, nunca durante o render.
-    // eslint-disable-next-line react-hooks/purity
     const silenceRemaining = Math.max(0, LIVE_IDLE_LOOP_DELAY_MS - (Date.now() - lastSpeechAtRef.current));
     idleLoopTimerRef.current = window.setTimeout(playIdleLoopPhrase, Math.max(minimumDelay, silenceRemaining));
   };
@@ -327,7 +326,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const interruptIdleLoopForSpeech = () => {
     // Executado apenas em resposta à captura de fala.
-    // eslint-disable-next-line react-hooks/purity
     lastSpeechAtRef.current = Date.now();
     clearIdleLoopTimer();
     if (idleLoopActiveRef.current) {
@@ -341,6 +339,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   function dispatchNextBatch() {
     if (!avatarReadyRef.current || avatarBusyRef.current || !pendingBatchesRef.current.length) return;
+    if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
+    playbackTimerRef.current = null;
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
     clearAvatarProcessingTimer();
@@ -357,7 +357,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
     avatarRecoveryCountRef.current = 0;
-    avatarWidgetReloadCountRef.current = 0;
     avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     refreshBatchView();
@@ -420,36 +419,36 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
   };
 
-  const completeActiveBatch = (status: "done" | "error") => {
+  const completeActiveBatch = () => {
     clearAvatarProcessingTimer();
+    playbackTimerRef.current = null;
     if (!activeBatchRef.current) return;
     const completedBatch = activeBatchRef.current;
-    completedBatch.status = status;
-    void updateRemoteBatch(completedBatch.id, status, status === "error" ? "O widget não conseguiu traduzir o lote." : undefined);
-    if (status === "done") {
-      setProcessedBatches((value) => value + 1);
-      recentPhrasesRef.current = [...recentPhrasesRef.current, { ...completedBatch }].slice(-2);
-    }
+    completedBatch.status = "done";
+    void updateRemoteBatch(completedBatch.id, "done");
+    setProcessedBatches((value) => value + 1);
+    recentPhrasesRef.current = [...recentPhrasesRef.current, { ...completedBatch }].slice(-2);
     activeBatchRef.current = null;
     avatarBusyRef.current = false;
     avatarCommandAcknowledgedRef.current = false;
     refreshBatchView();
-    if (status === "done") {
-      dispatchNextBatch();
-      scheduleIdleLoop();
-    }
+    dispatchNextBatch();
+    scheduleIdleLoop();
   };
 
   const releaseAvatarAfterRetryFailure = () => {
     clearAvatarRetryTimer();
     clearAvatarProcessingTimer();
+    if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
+    playbackTimerRef.current = null;
     avatarRetryCountRef.current = 0;
     avatarCommandAcknowledgedRef.current = false;
     avatarPlaybackStartedRef.current = false;
     if (idleLoopActiveRef.current) {
       idleLoopActiveRef.current = false;
       avatarBusyRef.current = false;
-      scheduleIdleLoop(LIVE_IDLE_LOOP_GAP_MS);
+      dispatchNextBatch();
+      if (!avatarBusyRef.current) scheduleIdleLoop(LIVE_IDLE_LOOP_DELAY_MS);
       return;
     }
     const failedBatch = activeBatchRef.current;
@@ -459,6 +458,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
     activeBatchRef.current = null;
     avatarBusyRef.current = false;
+    setAvatarError("");
+    setAvatarStatus(`${avatarNames[avatar]} seguindo com a próxima frase`);
     refreshBatchView();
     dispatchNextBatch();
     scheduleIdleLoop();
@@ -489,16 +490,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     clearAvatarProcessingTimer();
     if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
     if (avatarRecoveryCountRef.current >= LIVE_AVATAR_MAX_RECOVERIES) {
-      const activeFrame = frameRef.current;
-      if (avatarWidgetReloadCountRef.current >= 1 || !activeFrame) {
-        releaseAvatarAfterRetryFailure();
-        return;
-      }
-      avatarWidgetReloadCountRef.current += 1;
-      avatarReadyRef.current = false;
-      setAvatarReady(false);
-      setAvatarStatus(`Reiniciando o renderizador da ${avatarNames[avatar]}`);
-      activeFrame.src = widgetUrl;
+      // Um lote lento não significa que o WebGL travou. Preserve o renderizador,
+      // encerre apenas este lote e deixe os próximos avançarem pela fila.
+      releaseAvatarAfterRetryFailure();
       return;
     }
     const phrase = idleLoopActiveRef.current
@@ -517,10 +511,11 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     else scheduleAvatarRetry();
   };
 
-  const scheduleAvatarProcessingWatchdog = () => {
+  const scheduleAvatarProcessingWatchdog = (status: string) => {
     clearAvatarProcessingTimer();
     if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
-    avatarProcessingTimerRef.current = window.setTimeout(recoverAcceptedAvatarPhrase, LIVE_AVATAR_PROCESSING_TIMEOUT_MS);
+    const timeout = status === "loading_pose" ? LIVE_AVATAR_POSE_LOAD_TIMEOUT_MS : LIVE_AVATAR_PROCESSING_TIMEOUT_MS;
+    avatarProcessingTimerRef.current = window.setTimeout(recoverAcceptedAvatarPhrase, timeout);
   };
 
   const scheduleAvatarRetry = () => {
@@ -559,8 +554,22 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       enqueueBatch(wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS).join(" "));
     }
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
-    const delay = /[.!?;:]$/.test(text.trim()) ? LIVE_BATCH_PUNCTUATION_MS : LIVE_BATCH_SILENCE_MS;
+    const queuedBatches = pendingBatchesRef.current.filter((batch) => batch.status !== "error").length + Number(Boolean(activeBatchRef.current));
+    const delay = batchFlushDelayMs(text, wordBufferRef.current.length, queuedBatches);
     batchTimerRef.current = window.setTimeout(() => flushWordBuffer(true), delay);
+  };
+
+  const currentAvatarPhrase = () => {
+    if (idleLoopActiveRef.current) {
+      const recent = recentPhrasesRef.current;
+      const index = idleLoopIndexRef.current === 0 ? recent.length - 1 : idleLoopIndexRef.current - 1;
+      return recent[index]?.glossText || recent[index]?.text || "";
+    }
+    return activeBatchRef.current?.glossText || activeBatchRef.current?.text || "";
+  };
+
+  const isCurrentAvatarPhrase = (phrase?: string) => {
+    return matchesActivePhrase(phrase, currentAvatarPhrase());
   };
 
   useEffect(() => {
@@ -609,6 +618,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       }
 
       if (data.type === "neotalk:pose-ready" && data.phrase && data.pose?.content_url) {
+        if (!isCurrentAvatarPhrase(data.phrase)) return;
         const shared: SharedPose = { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [], loadId: data.loadId, traceId: data.traceId, taskId: data.taskId };
         latestPoseRef.current = shared;
         if (shared.loadId) expectedPoseCorrelationRef.current = shared.loadId;
@@ -636,39 +646,53 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
           }
         }, 100);
       } else if (data.type === "neotalk:status" && data.status) {
+        if (["queued", "processing", "loading_pose", "playing"].includes(data.status) && !isCurrentAvatarPhrase(data.phrase)) return;
         if (avatarBusyRef.current && ["queued", "processing", "loading_pose"].includes(data.status)) {
           avatarCommandAcknowledgedRef.current = true;
           clearAvatarRetryTimer();
           avatarRetryCountRef.current = 0;
-          scheduleAvatarProcessingWatchdog();
+          scheduleAvatarProcessingWatchdog(data.status);
         }
         setAvatarStatus(statusLabels[data.status] || data.status);
       } else if (data.type === "neotalk:playing") {
+        if (!avatarBusyRef.current || !isCurrentAvatarPhrase(data.phrase)) return;
         const reportedCorrelation = data.correlationId || data.loadId;
         if (reportedCorrelation && expectedPoseCorrelationRef.current && reportedCorrelation !== expectedPoseCorrelationRef.current) return;
         clearAvatarRetryTimer();
         clearAvatarProcessingTimer();
         avatarRetryCountRef.current = 0;
         avatarRecoveryCountRef.current = 0;
-        avatarWidgetReloadCountRef.current = 0;
         avatarCommandAcknowledgedRef.current = true;
         avatarPlaybackStartedRef.current = true;
         setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
         const wordCount = Array.isArray(data.words) ? data.words.length : 4;
         if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
         playbackTimerRef.current = window.setTimeout(
-          () => idleLoopActiveRef.current ? finishIdleLoopPhrase() : completeActiveBatch("done"),
+          () => idleLoopActiveRef.current ? finishIdleLoopPhrase() : completeActiveBatch(),
           playbackDurationMs(latestPoseRef.current?.pose, wordCount),
         );
       } else if (data.type === "neotalk:error") {
+        if (!isCurrentAvatarPhrase(data.phrase)) return;
         const reportedCorrelation = data.correlationId || data.loadId;
         if (reportedCorrelation && expectedPoseCorrelationRef.current && reportedCorrelation !== expectedPoseCorrelationRef.current) return;
+        if (avatarPlaybackStartedRef.current) {
+          // A pose já está animando; erro tardio não deve interromper a fila.
+          if (diagnostics) console.warn("Aviso tardio do widget durante reprodução", { code: data.code, traceId: data.traceId });
+          return;
+        }
         if (data.code === "transient_api_error" && diagnostics) {
           console.warn("Falha transitória na pose", { stage: data.stage, traceId: data.traceId, message: data.message });
         }
-        if (data.code === "pose_cache_miss" && idleLoopActiveRef.current) {
-          const phrase = recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1];
-          if (phrase && sendToAvatar(poseCommandFor(phrase.glossText || phrase.text))) return;
+        if (data.code === "pose_cache_miss") {
+          const phrase = currentAvatarPhrase();
+          if (phrase) {
+            recentPosesRef.current.delete(poseKey(phrase));
+            avatarCommandAcknowledgedRef.current = false;
+            if (sendToAvatar({ type: "neotalk:sign", phrase })) {
+              scheduleAvatarRetry();
+              return;
+            }
+          }
         }
         if (["transient_api_error", "pose_ack_timeout", "pose_load_failed", "pose_cache_miss"].includes(data.code || "") || isRetryableAvatarError(data.message)) {
           setAvatarError("");
@@ -686,22 +710,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
           setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
           return;
         }
-        if (!diagnostics) {
-          setAvatarError("");
-          setAvatarStatus("Ajustando a tradução");
-          if (!avatarPlaybackStartedRef.current) scheduleAvatarRetry();
-          return;
-        }
-        avatarReadyRef.current = false;
-        setAvatarReady(false);
-        setAvatarError(data.message || "Não foi possível traduzir o lote atual.");
-        setAvatarStatus("Fila pausada");
-        if (idleLoopActiveRef.current) {
-          idleLoopActiveRef.current = false;
-          avatarBusyRef.current = false;
-        } else {
-          completeActiveBatch("error");
-        }
+        if (diagnostics) console.warn("Falha no lote do avatar", { code: data.code, message: data.message, traceId: data.traceId });
+        setAvatarError("");
+        releaseAvatarAfterRetryFailure();
       }
     };
 

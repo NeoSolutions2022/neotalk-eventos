@@ -22,3 +22,16 @@ test("shortens only the handoff buffers", () => {
   assert.ok(timing.LIVE_BATCH_SILENCE_MS <= 350);
   assert.ok(timing.LIVE_IDLE_LOOP_GAP_MS <= 150);
 });
+
+test("groups short fragments only when the live queue is backed up", () => {
+  assert.equal(timing.batchFlushDelayMs("vamos continuar", 3, 1), 320);
+  assert.equal(timing.batchFlushDelayMs("vamos continuar", 3, 3), 650);
+  assert.equal(timing.batchFlushDelayMs("vamos continuar", 7, 3), 320);
+  assert.equal(timing.batchFlushDelayMs("vamos continuar.", 3, 3), 120);
+});
+
+test("ignores late events from a previous phrase", () => {
+  assert.equal(timing.matchesActivePhrase("BOM DIA", "BOA TARDE"), false);
+  assert.equal(timing.matchesActivePhrase("  bom  dia ", "BOM DIA"), true);
+  assert.equal(timing.matchesActivePhrase("BOM DIA", ""), false);
+});

@@ -55,7 +55,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
   assert.match(liveRoom, /className="live-captions"/);
   assert.match(liveRoom, /window\.location\.href = "\/salas"/);
-  assert.match(liveRoom, /LIVE_BATCH_SILENCE_MS/);
+  assert.match(liveRoom, /batchFlushDelayMs/);
   assert.match(liveTiming, /LIVE_BATCH_SILENCE_MS = 320/);
   assert.match(liveRoom, /batchTimerRef\.current = window\.setTimeout\(\(\) => flushWordBuffer\(true\), delay\)/);
   assert.match(liveRoom, /playbackDurationMs\(latestPoseRef\.current\?\.pose, wordCount\)/);
@@ -87,13 +87,16 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /agent\.skipped/);
   assert.doesNotMatch(liveRoom, /avatarError && <div className="avatar-error"/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
-  assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 75000/);
+  assert.match(liveRoom, /LIVE_AVATAR_PROCESSING_TIMEOUT_MS = 20000/);
   assert.match(liveRoom, /recentPosesRef/);
   assert.match(liveRoom, /poseCommandFor\(phrase\.glossText \|\| phrase\.text\)/);
   assert.match(liveRoom, /neotalk:pose-stage/);
   assert.match(liveRoom, /Copiar diagnóstico/);
   assert.match(liveRoom, /scheduleAvatarProcessingWatchdog/);
-  assert.match(liveRoom, /Reiniciando o renderizador/);
+  assert.doesNotMatch(liveRoom, /activeFrame\.src = widgetUrl/);
+  assert.doesNotMatch(liveRoom, /setAvatarReady\(false\)/);
+  assert.match(liveRoom, /releaseAvatarAfterRetryFailure\(\)/);
+  assert.match(liveRoom, /if \(idleLoopActiveRef\.current\) \{[\s\S]*?dispatchNextBatch\(\);[\s\S]*?scheduleIdleLoop\(LIVE_IDLE_LOOP_DELAY_MS\)/);
   assert.match(liveRoom, /avatarCommandAcknowledgedRef/);
   assert.match(liveRoom, /else scheduleAvatarRetry\(\)/);
   assert.match(liveRoom, /toggleMicrophone/);
