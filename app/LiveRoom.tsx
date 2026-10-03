@@ -25,7 +25,7 @@ type SpeechRecognitionLike = {
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number; height?: number }) => Promise<Window> };
 type SharedPose = { phrase: string; pose: { content_url: string; fps?: number; frame_count?: number }; words: string[]; loadId?: string; traceId?: string; taskId?: string };
-type AvatarMessage = { type?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
+type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type PoseDiagnostic = { at: string; output: "principal" | "mini-player"; batchId: number | null; event: string; stage?: string; code?: string; loadId?: string; correlationId?: string; traceId?: string; taskId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
@@ -84,8 +84,13 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const embeddedAvatarReadyRef = useRef(false);
   const externalAvatarReadyRef = useRef(false);
   const avatarSupportsSharedPoseRef = useRef(false);
+  const avatarSupportsPrefetchRef = useRef(false);
   const externalSupportsSharedPoseRef = useRef(false);
   const latestPoseRef = useRef<SharedPose | null>(null);
+  const prefetchedPosesRef = useRef(new Map<string, SharedPose>());
+  const prefetchingPhrasesRef = useRef(new Set<string>());
+  const prefetchStartedAtRef = useRef(new Map<string, number>());
+  const batchDispatchedAtRef = useRef(0);
   const expectedPoseCorrelationRef = useRef<string | null>(null);
   const recentPosesRef = useRef(new Map<string, SharedPose>());
   const externalCurrentPoseRef = useRef<SharedPose | null>(null);
@@ -215,14 +220,28 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     while (recentPosesRef.current.size > 8) recentPosesRef.current.delete(recentPosesRef.current.keys().next().value!);
   };
 
+  const prefetchNextBatch = () => {
+    if (!embeddedAvatarReadyRef.current || !avatarSupportsPrefetchRef.current || !avatarBusyRef.current) return;
+    const next = pendingBatchesRef.current.find((batch) => batch.status !== "error");
+    if (!next || next.status !== "ready" || !next.glossText) return;
+    const key = poseKey(next.glossText);
+    if (recentPosesRef.current.has(key) || prefetchedPosesRef.current.has(key) || prefetchingPhrasesRef.current.has(key)) return;
+    const frame = frameRef.current?.contentWindow;
+    if (!frame) return;
+    prefetchingPhrasesRef.current.add(key);
+    prefetchStartedAtRef.current.set(key, Date.now());
+    recordPoseDiagnostic("principal", { type: "neotalk:prefetch-start" }, next.id);
+    frame.postMessage({ type: "neotalk:prefetch", phrase: next.glossText }, widgetOrigin);
+  };
+
   const poseCommandFor = (phrase: string): Record<string, unknown> => {
     const cached = recentPosesRef.current.get(poseKey(phrase));
     return cached && avatarSupportsSharedPoseRef.current ? { type: "neotalk:load-pose", ...cached } : { type: "neotalk:sign", phrase };
   };
 
-  const recordPoseDiagnostic = (output: PoseDiagnostic["output"], data: AvatarMessage) => {
+  const recordPoseDiagnostic = (output: PoseDiagnostic["output"], data: AvatarMessage, batchId = activeBatchRef.current?.id ?? null) => {
     const event: PoseDiagnostic = {
-      at: new Date().toISOString(), output, batchId: activeBatchRef.current?.id ?? null,
+      at: new Date().toISOString(), output, batchId,
       event: data.type || "unknown", stage: data.stage, code: data.code,
       loadId: data.loadId, correlationId: data.correlationId, traceId: data.traceId,
       taskId: data.taskId, poseId: data.poseId, attempt: data.attempt,
@@ -354,6 +373,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     expectedPoseCorrelationRef.current = null;
     void updateRemoteBatch(next.id, "translating");
     activeBatchRef.current = next;
+    batchDispatchedAtRef.current = Date.now();
     avatarBusyRef.current = true;
     avatarRetryCountRef.current = 0;
     avatarRecoveryCountRef.current = 0;
@@ -362,13 +382,24 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     refreshBatchView();
     setAvatarError("");
     setAvatarStatus(`Enviando glosas para ${avatarNames[avatar]}`);
-    if (!sendToAvatar({ type: "neotalk:sign", phrase: next.glossText })) {
+    const key = poseKey(next.glossText || "");
+    const prepared = prefetchedPosesRef.current.get(key) || recentPosesRef.current.get(key);
+    if (prepared) {
+      prefetchedPosesRef.current.delete(key);
+      latestPoseRef.current = prepared;
+    }
+    if (!sendToAvatar(prepared && avatarSupportsSharedPoseRef.current
+      ? { type: "neotalk:load-pose", ...prepared }
+      : { type: "neotalk:sign", phrase: next.glossText })) {
       next.status = "ready";
       pendingBatchesRef.current.unshift(next);
       activeBatchRef.current = null;
       avatarBusyRef.current = false;
       refreshBatchView();
-    } else scheduleAvatarRetry();
+    } else {
+      scheduleAvatarRetry();
+      prefetchNextBatch();
+    }
   }
 
   const translateBatch = (batch: LiveBatch) => {
@@ -390,6 +421,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       batch.status = "ready";
       agentResultsRef.current.set(batch.id, agent);
       void updateRemoteBatch(batch.id, "translating");
+      prefetchNextBatch();
     }).catch((reason) => {
       const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
       batch.status = "error";
@@ -617,6 +649,33 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         return;
       }
 
+      if (data.type === "neotalk:prefetch-ready" && data.phrase && data.pose?.content_url) {
+        const key = poseKey(data.phrase);
+        prefetchingPhrasesRef.current.delete(key);
+        const startedAt = prefetchStartedAtRef.current.get(key);
+        prefetchStartedAtRef.current.delete(key);
+        const pending = pendingBatchesRef.current.find((batch) => batch.status === "ready" && poseKey(batch.glossText || "") === key);
+        recordPoseDiagnostic("principal", { ...data, elapsedMs: startedAt ? Date.now() - startedAt : undefined }, pending?.id ?? null);
+        if (data.avatar === avatar && pending) {
+          prefetchedPosesRef.current.set(key, {
+            phrase: data.phrase, pose: data.pose,
+            words: Array.isArray(data.words) ? data.words.map(String) : [],
+            loadId: data.loadId, traceId: data.traceId, taskId: data.taskId,
+          });
+        }
+        return;
+      }
+      if (data.type === "neotalk:prefetch-error") {
+        if (data.phrase) {
+          const key = poseKey(data.phrase);
+          prefetchingPhrasesRef.current.delete(key);
+          const startedAt = prefetchStartedAtRef.current.get(key);
+          prefetchStartedAtRef.current.delete(key);
+          recordPoseDiagnostic("principal", { ...data, elapsedMs: startedAt ? Date.now() - startedAt : undefined });
+        }
+        return;
+      }
+
       if (data.type === "neotalk:pose-ready" && data.phrase && data.pose?.content_url) {
         if (!isCurrentAvatarPhrase(data.phrase)) return;
         const shared: SharedPose = { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [], loadId: data.loadId, traceId: data.traceId, taskId: data.taskId };
@@ -631,6 +690,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         embeddedAvatarReadyRef.current = true;
         avatarReadyRef.current = true;
         avatarSupportsSharedPoseRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("shared-pose");
+        avatarSupportsPrefetchRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("prefetch");
         setAvatarReady(true);
         setAvatarError("");
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
@@ -658,12 +718,16 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         if (!avatarBusyRef.current || !isCurrentAvatarPhrase(data.phrase)) return;
         const reportedCorrelation = data.correlationId || data.loadId;
         if (reportedCorrelation && expectedPoseCorrelationRef.current && reportedCorrelation !== expectedPoseCorrelationRef.current) return;
+        if (!idleLoopActiveRef.current && batchDispatchedAtRef.current) {
+          recordPoseDiagnostic("principal", { type: "neotalk:playback-start", elapsedMs: Date.now() - batchDispatchedAtRef.current });
+        }
         clearAvatarRetryTimer();
         clearAvatarProcessingTimer();
         avatarRetryCountRef.current = 0;
         avatarRecoveryCountRef.current = 0;
         avatarCommandAcknowledgedRef.current = true;
         avatarPlaybackStartedRef.current = true;
+        prefetchNextBatch();
         setAvatarStatus(idleLoopActiveRef.current ? `${avatarNames[avatar]} mantendo a tradução ativa` : `${avatarNames[avatar]} sinalizando o lote atual`);
         const wordCount = Array.isArray(data.words) ? data.words.length : 4;
         if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
@@ -846,6 +910,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const selectAvatar = (value: AvatarId) => {
     latestPoseRef.current = null;
     recentPosesRef.current.clear();
+    prefetchedPosesRef.current.clear();
+    prefetchingPhrasesRef.current.clear();
+    prefetchStartedAtRef.current.clear();
     expectedPoseCorrelationRef.current = null;
     setAvatar(value);
     if (sendToAvatar({ type: "neotalk:set-avatar", avatar: value })) setAvatarStatus("Trocando avatar");
@@ -961,6 +1028,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       agentResultsRef.current.clear();
       recentPhrasesRef.current = [];
       recentPosesRef.current.clear();
+      prefetchedPosesRef.current.clear();
+      prefetchingPhrasesRef.current.clear();
+      prefetchStartedAtRef.current.clear();
       latestPoseRef.current = null;
       expectedPoseCorrelationRef.current = null;
       poseDiagnosticsRef.current = [];
