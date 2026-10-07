@@ -6,6 +6,7 @@ import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessag
 import { ApiError, apiRequest } from "./apiClient";
 import { batchFlushDelayMs, LIVE_IDLE_LOOP_GAP_MS, matchesActivePhrase, playbackDurationMs } from "./liveTiming";
 import { LiveSessionScope, OrderedTranscriptBuffer, retryLiveRequest } from "./liveResilience";
+import { playbackComplete } from "./playbackCompletion.mjs";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -123,6 +124,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const batchTimerRef = useRef<number | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const idleLoopTimerRef = useRef<number | null>(null);
+  const idleLoopTimerWindowRef = useRef<Window | null>(null);
   const avatarRetryTimerRef = useRef<number | null>(null);
   const avatarProcessingTimerRef = useRef<number | null>(null);
   const avatarRetryCountRef = useRef(0);
@@ -331,8 +333,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const clearIdleLoopTimer = () => {
-    if (idleLoopTimerRef.current) window.clearTimeout(idleLoopTimerRef.current);
+    if (idleLoopTimerRef.current !== null) (idleLoopTimerWindowRef.current || window).clearTimeout(idleLoopTimerRef.current);
     idleLoopTimerRef.current = null;
+    idleLoopTimerWindowRef.current = null;
   };
 
   const clearAvatarRetryTimer = () => {
@@ -374,7 +377,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (!listeningRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length || !recentPhrasesRef.current.length) return;
     // Executado apenas pelo timer/evento de reprodução, nunca durante o render.
     const silenceRemaining = Math.max(0, LIVE_IDLE_LOOP_DELAY_MS - (Date.now() - lastSpeechAtRef.current));
-    idleLoopTimerRef.current = window.setTimeout(playIdleLoopPhrase, Math.max(minimumDelay, silenceRemaining));
+    const external = externalWindowRef.current;
+    const timerWindow = external && !external.closed ? external : window;
+    idleLoopTimerWindowRef.current = timerWindow;
+    idleLoopTimerRef.current = timerWindow.setTimeout(playIdleLoopPhrase, Math.max(minimumDelay, silenceRemaining));
   };
 
   const finishIdleLoopPhrase = () => {
@@ -541,9 +547,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   function finishNativePlayback() {
     const native = nativePlaybackRef.current;
-    if (!avatarBusyRef.current || !native.primaryDone) return;
-    const externalOpen = externalWindowRef.current && !externalWindowRef.current.closed;
-    if (native.externalRequired && externalOpen && !native.externalDone) return;
+    if (!avatarBusyRef.current) return;
+    const externalOpen = Boolean(externalWindowRef.current && !externalWindowRef.current.closed);
+    if (!playbackComplete(native, document.visibilityState === "hidden", externalOpen)) return;
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
     playbackTimerRef.current = null;
     if (idleLoopActiveRef.current) finishIdleLoopPhrase();
@@ -1503,6 +1509,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   useEffect(() => {
     const restoreLongRunningSession = () => {
+      // Visibility can change after the external final frame arrived. Re-check
+      // completion immediately rather than waiting for a throttled watchdog.
+      finishNativePlayback();
       if (offline && document.visibilityState === "hidden" && listeningRef.current && !microphoneMutedRef.current) {
         microphoneMutedRef.current = true;
         setMicrophoneMuted(true);
@@ -1557,7 +1566,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (sessionHealthTimerRef.current) window.clearInterval(sessionHealthTimerRef.current);
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
-    if (idleLoopTimerRef.current) window.clearTimeout(idleLoopTimerRef.current);
+    clearIdleLoopTimer();
     if (avatarRetryTimerRef.current) window.clearTimeout(avatarRetryTimerRef.current);
     if (avatarProcessingTimerRef.current) window.clearTimeout(avatarProcessingTimerRef.current);
     if (heartbeatTimerRef.current) window.clearTimeout(heartbeatTimerRef.current);
@@ -1582,6 +1591,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const restoreStage = (sourceWindow?: Window) => {
     if (sourceWindow && externalWindowRef.current !== sourceWindow) return;
+    clearIdleLoopTimer();
     const messageHandler = avatarMessageHandlerRef.current;
     if (sourceWindow && messageHandler) sourceWindow.removeEventListener("message", messageHandler);
     externalWindowRef.current = null;
@@ -1593,6 +1603,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalSupportsSharedPoseRef.current = false;
     externalSupportsNativePlaybackRef.current = false;
     finishNativePlayback();
+    if (!avatarBusyRef.current) scheduleIdleLoop();
     setExternalPlayerMode(null);
   };
 
@@ -1653,6 +1664,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     targetDocument.body.replaceChildren(shell);
 
     externalWindowRef.current = targetWindow;
+    if (!avatarBusyRef.current) scheduleIdleLoop();
     externalFrameRef.current = outputFrame;
     externalCaptionRef.current = caption;
     externalCurrentPoseRef.current = null;
