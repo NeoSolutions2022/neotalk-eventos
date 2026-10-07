@@ -34,19 +34,31 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   if (options.signal?.aborted) abortFromCaller();
   else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
   const timeout = setTimeout(() => controller.abort(new DOMException("A API excedeu o tempo de resposta.", "TimeoutError")), API_REQUEST_TIMEOUT_MS);
-  let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include", signal: controller.signal });
+    const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include", signal: controller.signal });
+    if (!response.ok) {
+      const payload = await response.json().catch((reason: unknown) => {
+        controller.signal.throwIfAborted();
+        if (!(reason instanceof SyntaxError)) throw reason;
+        return {};
+      });
+      controller.signal.throwIfAborted();
+      throw new ApiError(response.status, typeof payload?.detail === 'string' ? payload.detail : `Falha da API (${response.status})`);
+    }
+    if (response.status === 204) return undefined as T;
+    try {
+      const payload = await response.json();
+      controller.signal.throwIfAborted();
+      return payload as T;
+    } catch (reason) {
+      controller.signal.throwIfAborted();
+      if (reason instanceof SyntaxError) throw new ApiError(502, 'A API retornou uma resposta inválida.');
+      throw reason;
+    }
   } finally {
     clearTimeout(timeout);
     options.signal?.removeEventListener("abort", abortFromCaller);
   }
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, payload.detail || `Falha da API (${response.status})`);
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
 }
 
 export async function loadSession(): Promise<SessionUser> {

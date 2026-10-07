@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NeoTalk Offline</string>
+    <string name="title_activity_main">NeoTalk Offline</string>
+    <string name="package_name">app.neotalk.offline</string>
+    <string name="custom_url_scheme">app.neotalk.offline</string>
+</resources>

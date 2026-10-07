@@ -1,0 +1,16 @@
+@import url('/platform.css');
+@font-face { font-family: 'InterLocal'; src: url('/inter.woff2') format('woff2'); font-display: swap; }
+:root { --font-inter: 'InterLocal'; }
+.offline-app { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+.offline-badge { color: #087d53; background: #e9f8f2; padding: 7px 12px; border-radius: 20px; font-weight: 600; }
+.offline-setup { display: flex; align-items: center; gap: 16px; justify-content: space-between; padding: 16px 20px; border: 1px solid var(--line); border-radius: 14px; background: white; margin-bottom: 20px; }
+.offline-setup p { color: var(--muted); margin: 4px 0 0; }
+.offline-setup button { border: 0; border-radius: 10px; background: var(--cyan); color: white; padding: 12px 18px; flex-shrink: 0; }
+.offline-setup button:disabled { opacity: .6; }
+.offline-error,.offline-warning { padding: 12px 16px; border-radius: 10px; background: #fff2f2; color: #a0212c; }
+.offline-warning { background: #fff6e5; color: #805015; }
+.offline-sidebar-note { padding: 12px 24px; color: #afbdcf; font-size: 12px; }
+/* Desktop-only output options must not promise PiP/OBS on a phone. */
+.offline-app .studio-panel > .config-block:last-child { display: none; }
+.offline-app select option:not([value="elia"]) { display: none; }
+@media(max-width: 700px) { .offline-setup { align-items: stretch; flex-direction: column; } }

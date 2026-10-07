@@ -666,7 +666,7 @@ async def start_room(room_id: UUID, pool: asyncpg.Pool = Depends(get_pool), user
         """
         UPDATE rooms
         SET status = 'live', started_at = COALESCE(started_at, NOW()), ended_at = NULL, updated_at = NOW()
-        WHERE id = $1 AND (user_id = $2 OR $3 = 'admin')
+        WHERE id = $1 AND status IN ('ready', 'live') AND (user_id = $2 OR $3 = 'admin')
         RETURNING *, (SELECT COUNT(*) FROM translation_batches WHERE room_id = $1)::BIGINT AS batch_count
         """,
         room_id, user.id, user.role,
@@ -680,10 +680,20 @@ async def start_room(room_id: UUID, pool: asyncpg.Pool = Depends(get_pool), user
 async def finish_room(room_id: UUID, payload: RoomFinish, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
     row = await pool.fetchrow(
         """
-        UPDATE rooms
-        SET status = 'finished', ended_at = NOW(), duration_seconds = $2, updated_at = NOW()
+        WITH finished_room AS (UPDATE rooms
+        SET status = 'finished', ended_at = COALESCE(ended_at, NOW()),
+            duration_seconds = GREATEST(duration_seconds, $2), updated_at = NOW()
         WHERE id = $1 AND (user_id = $3 OR $4 = 'admin')
-        RETURNING *, (SELECT COUNT(*) FROM translation_batches WHERE room_id = $1)::BIGINT AS batch_count
+        RETURNING *), closed_batches AS (
+            UPDATE translation_batches SET status='error',
+                error_message=COALESCE(error_message, 'Sala encerrada antes de concluir este trecho.'),
+                completed_at=COALESCE(completed_at, NOW()), updated_at=NOW()
+            WHERE room_id IN (SELECT id FROM finished_room) AND status IN ('queued', 'translating')
+            RETURNING id
+        )
+        SELECT finished_room.*,
+            (SELECT COUNT(*) FROM translation_batches WHERE room_id = $1)::BIGINT AS batch_count
+        FROM finished_room
         """,
         room_id,
         payload.duration_seconds,
@@ -713,7 +723,7 @@ async def create_batch(room_id: UUID, payload: BatchCreate, pool: asyncpg.Pool =
     async with pool.acquire() as connection:
         async with connection.transaction():
             room_exists = await connection.fetchval(
-                "SELECT id FROM rooms WHERE id=$1 AND (user_id=$2 OR $3='admin') FOR UPDATE",
+                "SELECT id FROM rooms WHERE id=$1 AND status='live' AND (user_id=$2 OR $3='admin') FOR UPDATE",
                 room_id, user.id, user.role,
             )
             if not room_exists:
@@ -747,9 +757,9 @@ async def update_batch(batch_id: UUID, payload: BatchUpdate, pool: asyncpg.Pool 
             prompt_id = COALESCE($5::UUID, prompt_id),
             model = COALESCE($6::VARCHAR, model),
             agent_latency_ms = COALESCE($7::INTEGER, agent_latency_ms),
-            completed_at = CASE WHEN $2::VARCHAR IN ('done', 'error') THEN NOW() ELSE NULL END,
+            completed_at = CASE WHEN $2::VARCHAR IN ('done', 'error') THEN COALESCE(completed_at, NOW()) ELSE NULL END,
             updated_at = NOW()
-        WHERE id = $1 AND EXISTS (
+        WHERE id = $1 AND (status NOT IN ('done', 'error') OR status=$2::VARCHAR) AND EXISTS (
             SELECT 1 FROM rooms WHERE rooms.id=translation_batches.room_id
             AND (rooms.user_id=$8 OR $9='admin')
         )
@@ -765,6 +775,15 @@ async def update_batch(batch_id: UUID, payload: BatchUpdate, pool: asyncpg.Pool 
         user.id,
         user.role,
     )
+    if not row:
+        # A late PATCH must not regress an already finalized batch. Return its
+        # authoritative state, still checking ownership, instead of a false 404.
+        row = await pool.fetchrow(
+            """SELECT translation_batches.* FROM translation_batches JOIN rooms
+               ON rooms.id=translation_batches.room_id WHERE translation_batches.id=$1
+               AND (rooms.user_id=$2 OR $3='admin')""",
+            batch_id, user.id, user.role,
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Lote não encontrado.")
     return record_dict(row)

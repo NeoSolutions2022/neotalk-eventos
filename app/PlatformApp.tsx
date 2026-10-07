@@ -126,6 +126,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           })}
         </nav>
         <div className="sidebar-bottom">
+          <a href="/offline" className="logout">App offline · Android e iPhone</a>
           <div className="help-card"><span className="help-icon">?</span><strong>Precisa de ajuda?</strong><small>Fale com nosso time</small><button onClick={() => showToast("Atendimento solicitado")}>Abrir atendimento</button></div>
           <button className="logout" onClick={logout}><span><Icon name="logout" /></span> Sair</button>
         </div>

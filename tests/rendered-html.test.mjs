@@ -83,7 +83,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /outputStage\.append\(outputFrame, brand, caption, language\)/);
   assert.doesNotMatch(liveRoom, /shell\.appendChild\(stage\)/);
   assert.doesNotMatch(liveRoom, /Formato do player/);
-  assert.match(liveRoom, /retryTransientApi/);
+  assert.match(liveRoom, /retryLiveRequest/);
   assert.match(liveRoom, /agent\.skipped/);
   assert.doesNotMatch(liveRoom, /avatarError && <div className="avatar-error"/);
   assert.match(liveRoom, /LIVE_AVATAR_MAX_RETRIES = 2/);
@@ -94,7 +94,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /Copiar diagnóstico/);
   assert.match(liveRoom, /scheduleAvatarProcessingWatchdog/);
   assert.doesNotMatch(liveRoom, /activeFrame\.src = widgetUrl/);
-  assert.doesNotMatch(liveRoom, /setAvatarReady\(false\)/);
+  assert.match(liveRoom, /data.status === "loading_avatar"[\s\S]*?setAvatarReady\(false\)/);
   assert.match(liveRoom, /releaseAvatarAfterRetryFailure\(\)/);
   assert.match(liveRoom, /if \(idleLoopActiveRef\.current\) \{[\s\S]*?dispatchNextBatch\(\);[\s\S]*?scheduleIdleLoop\(LIVE_IDLE_LOOP_DELAY_MS\)/);
   assert.match(liveRoom, /avatarCommandAcknowledgedRef/);
