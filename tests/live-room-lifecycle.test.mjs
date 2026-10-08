@@ -5,6 +5,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+import { playbackComplete } from '../app/playbackCompletion.mjs';
 const compilerOptions = { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX };
 const sources = {};
 for (const name of ['LiveRoom', 'liveResilience', 'liveTiming', 'avatarMessages']) {
@@ -33,6 +34,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' }, process: { env: {} }, URL, AbortController, AbortSignal, DOMException, Blob,
     console, Error, TypeError, SyntaxError, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, btoa: value => Buffer.from(value).toString('base64') });
   const modules = {
+    './playbackCompletion.mjs': { playbackComplete },
     react, 'react/jsx-runtime': { jsx: () => null, jsxs: () => null, Fragment: Symbol('fragment') },
     './apiClient': { ApiError, apiRequest: async (path, options = {}) => { calls.push({ path, options }); return handler(path, options); } },
   };
@@ -46,7 +48,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
   const exposed = ['nativePlaybackRef', 'avatarSupportsNativePlaybackRef', 'externalSupportsNativePlaybackRef', 'handleNativePlaybackFrame', 'finishNativePlayback', 'startLiveRoom', 'stopLiveRoom', 'enqueueBatch', 'completeActiveBatch', 'runHeartbeat', 'sendToAvatar', 'playIdleLoopPhrase', 'queueFallbackTranscription', 'startFallbackChunk', 'fallbackStreamRef', 'fallbackTranscriptionQueueRef', 'fallbackTranscriptionInFlightRef',
     'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
-    'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure'];
+    'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
   const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')} };\n  return <>`);
   context.exports = {};
   vm.runInContext(ts.transpileModule(source, { compilerOptions }).outputText, context, { filename: 'LiveRoom.tsx' });
@@ -59,10 +61,39 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
   return { qa, calls, commands, externalCommands, toasts, timers, track, ApiError, navigator: context.navigator, context,
     message(data, source = frameWindow, origin = 'https://infra-avatar3d-oficial.k3p3ex.easypanel.host') { listeners.get('message')({ data, source, origin }); },
     external() { const externalFrame = {}; qa.externalFrameRef.current = { contentWindow: externalFrame };
-      qa.externalWindowRef.current = { closed: false, postMessage: command => externalCommands.push(command) };
+      qa.externalWindowRef.current = { closed: false, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, postMessage: command => externalCommands.push(command) };
       qa.externalAvatarReadyRef.current = true; qa.externalSupportsSharedPoseRef.current = true; qa.avatarSupportsSharedPoseRef.current = true; return externalFrame; },
     get recording() { return recording; } };
 }
+test('lookahead warms both upcoming poses once even when the first translation is pending', () => {
+  const h = harness();
+  h.qa.avatarBusyRef.current = true;
+  h.qa.avatarSupportsPrefetchRef.current = true;
+  h.qa.pendingBatchesRef.current = [{id:1,status:'translating'}, {id:2,status:'ready',glossText:'AMIGO'}, {id:3,status:'ready',glossText:'APRENDER'}];
+  h.qa.prefetchNextBatch(); h.qa.prefetchNextBatch();
+  assert.equal(h.commands.filter(c => c.type === 'neotalk:prefetch').length, 1);
+  h.qa.pendingBatchesRef.current.shift(); h.qa.prefetchNextBatch();
+  assert.equal(h.commands.filter(c => c.type === 'neotalk:prefetch').length, 2);
+});
+test('external room control starts capture and finishes the current room', async () => {
+  const h = harness(); h.qa.externalRoomActionRef.current(); await flush();
+  assert.equal(h.recording, true);
+  h.qa.externalRoomActionRef.current(); await flush();
+  assert.equal(h.recording, false);
+  assert.equal(h.qa.listeningRef.current, false);
+  assert.ok(h.calls.some(c => c.path.endsWith('/finish')));
+});
+test('loop counts already elapsed silence rather than adding another 2.2 seconds', () => {
+  const h = harness();
+  h.qa.listeningRef.current = true;
+  h.qa.recentPhrasesRef.current = [{text:'teste',status:'done'}];
+  h.qa.lastSpeechAtRef.current = Date.now() - 5000;
+  h.qa.scheduleIdleLoop();
+  assert.equal(h.timers.get(h.qa.idleLoopTimerRef.current).ms,120);
+  h.qa.lastSpeechAtRef.current = Date.now();
+  h.qa.scheduleIdleLoop();
+  assert.ok(h.timers.get(h.qa.idleLoopTimerRef.current).ms >= 2100, 'fresh speech still receives the silence window');
+});
 test('native completion waits for the actual terminal frame of both outputs', async () => {
   const h = harness(async path => path === '/agent/translate' ? { gloss_text: 'TESTE' } : { id: 'qa' });
   const external = h.external();
@@ -266,7 +297,8 @@ test('stress: 2,000 arrivals while translation stalls must not grow the queue wi
   const h = harness(async path => path === '/agent/translate' ? held.promise : { id: 'qa' });
   await h.qa.startLiveRoom();
   for (let i = 0; i < 2000; i++) h.qa.addTranscriptToBuffer(`frase numero ${i} com palavras para testar a fila agora mesmo aqui`);
-  assert.ok(h.qa.pendingBatchesRef.current.length <= 24, `queue grew to ${h.qa.pendingBatchesRef.current.length}`);
+  assert.ok(h.qa.pendingBatchesRef.current.length <= 72, `queue grew to ${h.qa.pendingBatchesRef.current.length}`);
+  assert.ok(h.qa.pendingBatchesRef.current.reduce((sum,batch) => sum + batch.text.split(' ').length,0) <= 864);
   assert.ok(h.qa.wordBufferRef.current.length <= 120);
   assert.ok(h.qa.agentPromisesRef.current.size <= 2);
   assert.equal(h.qa.microphoneMutedRef.current, true);
@@ -364,13 +396,62 @@ for (const wordsPerMinute of [140, 180, 220]) {
     const persisted = h.calls.filter(call => call.path.endsWith('/batches') && call.options.method === 'POST')
       .flatMap(call => JSON.parse(call.options.body).text.split(' '));
     assert.deepEqual(persisted, input, 'history must persist the sealed compound text, not an earlier fragment');
-    assert.ok(maxQueue < 24);
+    assert.ok(maxQueue < 72);
     assert.equal(h.toasts.some(text => /acumul|excedid|não pôde ser processado/.test(text)), false);
     assert.equal(h.commands.some(command => command.type === 'neotalk:set-avatar'), false);
     console.log(`PITCH ${wordsPerMinute} wpm: ${input.length} words; maxQueue=${maxQueue}; drainFinishedAt=${now}ms; translationRequests=${request}`);
     h.qa.stopLiveRoom();
   });
 }
+test('100 distinct natural pitch texts preserve every word under sustained queue pressure', async () => {
+  const phrases = JSON.parse(await readFile(new URL('./fixtures/live-pitch-texts.json', import.meta.url), 'utf8'));
+  const contexts = ['pela manhã', 'durante a reunião', 'ainda hoje', 'com nossa equipe', 'na escola'];
+  const texts = contexts.flatMap(context => phrases.map(phrase => `${phrase} ${context}.`));
+  let now = 0, index = 0, id = 0;
+  const replies = [], input = [], played = [];
+  const h = harness(async (path, options) => {
+    if (path !== '/agent/translate') return { id: `natural-${++id}` };
+    const text = JSON.parse(options.body).text, reply = deferred();
+    replies.push({ at: now + (id % 11 === 0 ? 1800 : 400), text, reply });
+    return reply.promise;
+  });
+  await h.qa.startLiveRoom();
+  let nextSpeech = 0, flushAt = Infinity, activeId = null, finishAt = Infinity, maxQueue = 0;
+  for (now = 0; now < 1200000; now += 100) {
+    if (index < texts.length && now >= nextSpeech) {
+      const text = texts[index++], words = text.split(/\s+/);
+      input.push(...words); h.qa.addTranscriptToBuffer(text);
+      nextSpeech += words.length * 60000 / 220; flushAt = now + 400;
+    }
+    if (now >= flushAt) { h.qa.flushWordBuffer(true); flushAt = Infinity; }
+    for (let i = replies.length - 1; i >= 0; i--) if (replies[i].at <= now) {
+      const item = replies.splice(i, 1)[0]; item.reply.resolve({ gloss_text: item.text.toUpperCase() });
+    }
+    await flush();
+    const active = h.qa.activeBatchRef.current;
+    if (active && active.id !== activeId) {
+      activeId = active.id;
+      // Explicit synthetic output timing, not real Unity throughput.
+      finishAt = now + active.text.split(' ').length * 350 + 80;
+    }
+    if (active && now >= finishAt) { played.push(...active.text.split(' ')); h.qa.completeActiveBatch(); activeId = null; await flush(); }
+    maxQueue = Math.max(maxQueue, h.qa.pendingBatchesRef.current.length);
+    assert.equal(h.qa.microphoneMutedRef.current, false);
+    assert.ok(h.qa.agentPromisesRef.current.size <= 2);
+    if (index === texts.length && !h.qa.activeBatchRef.current && !h.qa.pendingBatchesRef.current.length && !h.qa.wordBufferRef.current.length && !replies.length) break;
+  }
+  assert.equal(new Set(texts).size, 100);
+  assert.equal(index, 100);
+  assert.deepEqual(played, input);
+  const persisted = h.calls.filter(call => call.path.endsWith('/batches') && call.options.method === 'POST')
+    .flatMap(call => JSON.parse(call.options.body).text.split(' '));
+  assert.deepEqual(persisted, input);
+  assert.ok(maxQueue < 72);
+  assert.equal(h.commands.some(command => command.type === 'neotalk:set-avatar'), false);
+  assert.equal(h.toasts.some(text => /acumul|excedid|não pôde ser processado/.test(text)), false);
+  console.log(`NATURAL PITCH: 100 distinct texts, ${input.length} words, maxQueue=${maxQueue}, drained at ${now} virtual ms`);
+  h.qa.stopLiveRoom();
+});
 test('a recorder constructor failure safely terminates the room instead of throwing from a timer', () => {
   const h = harness(); h.qa.listeningRef.current = true;
   h.context.MediaRecorder = class { static isTypeSupported() { return true; } constructor() { throw new Error('unsupported device'); } };

@@ -40,10 +40,14 @@ const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia
 const LIVE_BATCH_MIN_WORDS = 2;
 const LIVE_BATCH_MAX_WORDS = 12;
 const LIVE_AGENT_CONCURRENCY = 2;
-const LIVE_PENDING_LIMIT = 24;
+// Keep the previous 864-word maximum capacity (24 * 36), split into shorter
+// jobs so preparation cannot balloon under normal pitch backpressure.
+const LIVE_PENDING_LIMIT = 72;
 const LIVE_RESUME_LIMIT = 8;
 const LIVE_BUFFER_LIMIT = 120;
-const LIVE_COMPOUND_BATCH_MAX_WORDS = 36;
+// Full-clip Unity preparation grows with the clip length. Backpressure may
+// join fragments, but must not turn them into a much larger animation job.
+const LIVE_COMPOUND_BATCH_MAX_WORDS = LIVE_BATCH_MAX_WORDS;
 const LIVE_IDLE_LOOP_DELAY_MS = 2200;
 const LIVE_AVATAR_RETRY_DELAY_MS = 2500;
 const LIVE_AVATAR_MAX_RETRIES = 2;
@@ -81,11 +85,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const externalWindowRef = useRef<Window | null>(null);
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalCaptionRef = useRef<HTMLDivElement | null>(null);
+  const externalRoomButtonRef = useRef<HTMLButtonElement | null>(null);
+  const externalRoomActionRef = useRef<() => void>(() => {});
   const embeddedAvatarReadyRef = useRef(false);
   const externalAvatarReadyRef = useRef(false);
   const avatarSupportsSharedPoseRef = useRef(false);
   const avatarSupportsPrefetchRef = useRef(false);
   const externalSupportsSharedPoseRef = useRef(false);
+  const externalSupportsPosePrefetchRef = useRef(false);
   const avatarSupportsNativePlaybackRef = useRef(false);
   const externalSupportsNativePlaybackRef = useRef(false);
   const nativePlaybackRef = useRef<NativePlayback>(emptyNativePlayback());
@@ -243,16 +250,17 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const prefetchNextBatch = () => {
     if (!embeddedAvatarReadyRef.current || !avatarSupportsPrefetchRef.current || !avatarBusyRef.current) return;
-    const next = pendingBatchesRef.current.find((batch) => batch.status !== "error");
-    if (!next || next.status !== "ready" || !next.glossText) return;
-    const key = poseKey(next.glossText);
-    if (recentPosesRef.current.has(key) || prefetchedPosesRef.current.has(key) || prefetchingPhrasesRef.current.has(key)) return;
     const frame = frameRef.current?.contentWindow;
     if (!frame) return;
-    prefetchingPhrasesRef.current.add(key);
-    prefetchStartedAtRef.current.set(key, Date.now());
-    recordPoseDiagnostic("principal", { type: "neotalk:prefetch-start" }, next.id);
-    frame.postMessage({ type: "neotalk:prefetch", phrase: next.glossText }, widgetOrigin);
+    for (const next of pendingBatchesRef.current.filter(batch => batch.status !== "error").slice(0, LIVE_AGENT_CONCURRENCY)) {
+      if (next.status !== "ready" || !next.glossText) continue;
+      const key = poseKey(next.glossText);
+      if (recentPosesRef.current.has(key) || prefetchedPosesRef.current.has(key) || prefetchingPhrasesRef.current.has(key)) continue;
+      prefetchingPhrasesRef.current.add(key);
+      prefetchStartedAtRef.current.set(key, Date.now());
+      recordPoseDiagnostic("principal", { type: "neotalk:prefetch-start" }, next.id);
+      frame.postMessage({ type: "neotalk:prefetch", phrase: next.glossText }, widgetOrigin);
+    }
   };
 
   const poseCommandFor = (phrase: string): Record<string, unknown> => {
@@ -372,7 +380,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     } else scheduleAvatarRetry();
   };
 
-  const scheduleIdleLoop = (minimumDelay = LIVE_IDLE_LOOP_DELAY_MS) => {
+  const scheduleIdleLoop = (minimumDelay = LIVE_IDLE_LOOP_GAP_MS) => {
     clearIdleLoopTimer();
     if (!listeningRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length || !recentPhrasesRef.current.length) return;
     // Executado apenas pelo timer/evento de reprodução, nunca durante o render.
@@ -813,6 +821,12 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         if (data.type === "neotalk:ready") {
           externalAvatarReadyRef.current = true;
           externalSupportsSharedPoseRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("shared-pose");
+          externalSupportsPosePrefetchRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("prefetch-pose");
+          if (externalSupportsPosePrefetchRef.current) {
+            for (const prepared of prefetchedPosesRef.current.values()) {
+              externalWindowRef.current?.postMessage({ type: "neotalk:external-player-command", message: { type: "neotalk:prefetch-pose", pose: prepared.pose } }, window.location.origin);
+            }
+          }
           externalSupportsNativePlaybackRef.current = process.env.NEXT_PUBLIC_NATIVE_PLAYBACK_COMPLETION !== "false" && Array.isArray(data.capabilities) && data.capabilities.includes("native-playback-progress");
           if (latestPoseRef.current && externalSupportsSharedPoseRef.current) sendSharedPoseToExternal(latestPoseRef.current);
           else if (!externalSupportsSharedPoseRef.current) {
@@ -855,6 +869,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
             words: Array.isArray(data.words) ? data.words.map(String) : [],
             loadId: data.loadId, traceId: data.traceId, taskId: data.taskId,
           });
+          const output = externalWindowRef.current;
+          if (output && !output.closed && externalAvatarReadyRef.current && externalSupportsPosePrefetchRef.current) {
+            output.postMessage({ type: "neotalk:external-player-command", message: { type: "neotalk:prefetch-pose", pose: data.pose } }, window.location.origin);
+          }
         }
         return;
       }
@@ -1479,6 +1497,19 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (recording) stopLiveRoom();
     else void startLiveRoom();
   };
+  // DOM controls in the separate document invoke the latest React closure.
+  externalRoomActionRef.current = () => {
+    if (startingRef.current) return;
+    if (listeningRef.current) stopLiveRoom();
+    else if (captureAvailable) void startLiveRoom();
+    else showToast("Prepare a voz local antes de iniciar a sala.");
+  };
+  useEffect(() => {
+    const button = externalRoomButtonRef.current;
+    if (!button) return;
+    button.textContent = starting ? "Iniciando…" : recording ? "Encerrar sala" : "Iniciar sala";
+    button.disabled = starting || (!recording && !captureAvailable);
+  }, [recording, starting, captureAvailable, externalPlayerMode]);
 
   const toggleMicrophone = () => {
     if (!recording) return;
@@ -1574,6 +1605,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
+    externalRoomButtonRef.current = null;
     externalCurrentPoseRef.current = null;
     externalPoseRecoveryRef.current = { correlationId: "", attempts: 0 };
     if (outputWindow && !outputWindow.closed) outputWindow.close();
@@ -1597,6 +1629,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
+    externalRoomButtonRef.current = null;
     externalCurrentPoseRef.current = null;
     externalPoseRecoveryRef.current = { correlationId: "", attempts: 0 };
     externalAvatarReadyRef.current = false;
@@ -1626,6 +1659,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       .neotalk-output-shell .live-stage { width: 100%; height: 100% !important; min-height: 0; border-radius: 0; }
       .neotalk-output-shell .avatar-widget-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
       .neotalk-output-shell .exit-fullscreen { display: none !important; }
+      .external-room-control { position:absolute; right:12px; top:42px; z-index:10; border:1px solid #ffffff55; border-radius:8px; background:#071423dd; color:white; padding:8px 12px; cursor:pointer; font:600 13px system-ui; }
     `;
     targetDocument.head.appendChild(outputStyles);
     await new Promise<void>((resolve, reject) => {
@@ -1659,7 +1693,13 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const language = targetDocument.createElement("span");
     language.className = "stage-language";
     language.textContent = "PT → LIBRAS";
-    outputStage.append(outputFrame, brand, caption, language);
+    const roomButton = targetDocument.createElement("button");
+    roomButton.type = "button";
+    roomButton.className = "external-room-control";
+    roomButton.textContent = listeningRef.current ? "Encerrar sala" : "Iniciar sala";
+    roomButton.addEventListener("click", () => externalRoomActionRef.current());
+    externalRoomButtonRef.current = roomButton;
+    outputStage.append(outputFrame, brand, caption, language, roomButton);
     shell.appendChild(outputStage);
     targetDocument.body.replaceChildren(shell);
 
@@ -1677,6 +1717,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     outputUrl.searchParams.set("avatar", avatar);
     outputFrame.src = outputUrl.toString();
     targetWindow.focus();
+    if (!listeningRef.current && captureAvailable) void startLiveRoom();
   };
 
   const closeExternalPlayer = () => {

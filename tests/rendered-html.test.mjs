@@ -80,7 +80,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /targetWindow\.addEventListener\("message", messageHandler\)/);
   assert.match(liveRoom, /externalFrameRef/);
   assert.match(liveRoom, /frameRef\.current\.contentWindow\.postMessage\(message, widgetOrigin\)/);
-  assert.match(liveRoom, /outputStage\.append\(outputFrame, brand, caption, language\)/);
+  assert.match(liveRoom, /outputStage\.append\(outputFrame, brand, caption, language, roomButton\)/);
   assert.doesNotMatch(liveRoom, /shell\.appendChild\(stage\)/);
   assert.doesNotMatch(liveRoom, /Formato do player/);
   assert.match(liveRoom, /retryLiveRequest/);

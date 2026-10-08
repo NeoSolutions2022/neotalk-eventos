@@ -6,8 +6,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
-const workspace = path.resolve(__dirname, '../..');
-const frontend = path.join(workspace, process.env.PITCH_WIDGET_FRONTEND || 'Avatar3DFrontend/frontend');
+const workspace = process.env.PITCH_WORKSPACE_ROOT || path.resolve(__dirname, '../..');
+const platformRoot = process.env.PITCH_PLATFORM_ROOT || path.join(workspace, 'neotalk-eventos');
+const widgetRoot = process.env.PITCH_WIDGET_REPO || path.join(workspace, 'Avatar3DFrontend');
+const frontend = path.join(widgetRoot, 'frontend');
 const nativeRoot = process.env.ELIA_NATIVE_BUILD;
 const base = 'http://localhost:3110';
 const widgetHost = 'https://infra-avatar3d-oficial.k3p3ex.easypanel.host';
@@ -22,7 +24,7 @@ const output = path.join(workspace, 'outputs', `pitch-soak-${Date.now()}`);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.pose': 'text/plain' };
 const normalize = text => text.replace(/\s+/g, ' ').trim();
-const phrases = [
+const phrases = process.env.PITCH_TEXTS_FILE ? require(path.resolve(process.env.PITCH_TEXTS_FILE)) : [
   'Nosso amigo pode aprender com você.',
   'Quero aprender antes de comprar agora.',
   'O amigo consegue compreender nossa proposta.',
@@ -37,16 +39,20 @@ const summarize = values => {
 };
 (async () => {
   await fs.mkdir(output, { recursive: true });
-  const { concatenatePoses } = await import(pathToFileURL(path.join(workspace, 'neotalk-eventos/mobile-offline/src/engine.mjs')));
+  const { concatenatePoses } = await import(pathToFileURL(path.join(platformRoot, 'mobile-offline/src/engine.mjs')));
   const poses = new Map();
-  for (const word of ['amigo', 'aprender', 'comprar', 'compreender']) poses.set(word.toUpperCase(), await fs.readFile(path.join(workspace, `Avatar3DFrontend/webgl/elia/StreamingAssets/${word}.pose`), 'utf8'));
+  for (const word of ['amigo', 'aprender', 'comprar', 'compreender']) poses.set(word.toUpperCase(), await fs.readFile(path.join(nativeRoot || path.join(widgetRoot,'webgl/elia'), 'StreamingAssets', `${word}.pose`), 'utf8'));
   const ledger = { configuration: { durationMs, wordsPerMinute, failureEvery, harnessSha256: crypto.createHash('sha256').update(await fs.readFile(__filename)).digest('hex'), realTime: true, fps: 30, translation: 'deterministic keyword double', recognition: 'scripted final transcripts', runtime: 'real Unity WebGL/SwiftShader', external: 'controlled same-origin popup shell, native PiP initialization NOT tested' }, input: [], batches: [], translations: [], injections: [], samples: [], events: [], pageErrors: [], consoleErrors: [], assertions: [], result: 'RUNNING' };
   const batchMap = new Map(), tasks = new Map(), combined = new Map(), translationAttempts = new Map(), signAttempts = new Map(), failedPoseCounters = new Set();
   let translationCounter = 0, taskCounter = 0, heartbeatCounter = 0, translateConcurrent = 0, maxTranslateConcurrent = 0, browser, page, popup, trackingStart = 0;
   const check = (condition, message) => { assert.ok(condition, message); ledger.assertions.push(message); console.log('PASS', message); };
-  const checkpoint = () => fs.writeFile(path.join(output, 'ledger.json'), JSON.stringify(ledger, null, 2));
+  const checkpoint = async () => {
+    if (page && !page.isClosed()) ledger.events = await page.evaluate(() => window.pitchEvents || []);
+    if (popup && !popup.isClosed()) ledger.externalEvents = await popup.evaluate(() => window.pitchEvents || []);
+    await fs.writeFile(path.join(output, 'ledger.json'), JSON.stringify(ledger, null, 2));
+  };
   try {
-    browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+    browser = await chromium.launch({ channel: process.env.PITCH_BROWSER_CHANNEL || 'msedge', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     context.on('requestfailed', request => console.log('REQUEST_FAILED', request.url(), request.failure()));
     context.on('response', response => { if (response.url().includes('external-player-relay')) console.log('RELAY', response.status()); });
@@ -70,7 +76,7 @@ const summarize = values => {
       });
     });
     await context.route('**/__qa-window', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head></head><body></body></html>' }));
-    await context.route('**/external-player-relay.js*', async route => route.fulfill({ contentType: 'text/javascript', body: await fs.readFile(path.join(workspace, 'neotalk-eventos/public/external-player-relay.js')) }));
+    await context.route('**/external-player-relay.js*', async route => route.fulfill({ contentType: 'text/javascript', body: await fs.readFile(path.join(platformRoot, 'public/external-player-relay.js')) }));
     await context.route(widgetHost + '/**', async route => {
       const url = new URL(route.request().url());
       if (url.pathname === '/api/v1/widget/config') return route.fulfill({ json: { allowed_origins: [base] } });
@@ -99,7 +105,7 @@ const summarize = values => {
       const file = url.pathname === '/widget' ? path.join(frontend, 'widget.html')
         : url.pathname.startsWith('/static/') ? path.join(frontend, url.pathname.slice(8))
           : nativeRoot && url.pathname.startsWith('/webgl/elia/') ? path.join(nativeRoot, url.pathname.slice('/webgl/elia/'.length))
-          : path.join(workspace, 'Avatar3DFrontend', url.pathname.slice(1));
+          : path.join(widgetRoot, url.pathname.slice(1));
       try { await route.fulfill({ body: await fs.readFile(file), contentType: mime[path.extname(file)] || 'application/octet-stream' }); }
       catch { await route.fulfill({ status: 404, body: 'Missing test asset' }); }
     });
@@ -144,12 +150,12 @@ const summarize = values => {
     page = await context.newPage();
     await page.goto(base + '/salas/ao-vivo', { waitUntil: 'domcontentloaded' });
     await page.locator('.avatar-health.connected').waitFor({ timeout: 120000 });
-    await page.getByRole('button', { name: 'Iniciar sala ao vivo', exact: true }).click();
-    await page.waitForFunction(() => !!window.pitchRecognition);
     // Use a separate real window: this covers the platform's relay and a second
     // Unity runtime without pretending to certify native Document PiP.
     const pop = context.waitForEvent('page');
     await page.getByRole('button', { name: /Mini-player flutuante/ }).click(); popup = await pop;
+    await page.waitForFunction(() => !!window.pitchRecognition);
+    check(await popup.getByRole('button', {name:'Encerrar sala',exact:true}).isVisible(), 'Opening mini-player starts capture and exposes room control');
     await popup.waitForFunction(() => window.pitchEvents?.some(event => event.type === 'neotalk:ready'), null, { timeout: 120000 });
     trackingStart = Date.now();
     const primaryReady = await page.evaluate(() => window.pitchEvents.filter(event => event.type === 'neotalk:ready').length);
@@ -163,7 +169,7 @@ const summarize = values => {
         checkSilent(await page.getByRole('button', { name: 'Mutar microfone', exact: true }).isVisible(), 'Microphone unexpectedly muted during pitch');
         ledger.input.push({ text, at: Date.now() });
         await page.evaluate(text => window.pitchRecognition.onresult({ resultIndex: 0, results: { length: 1, 0: { isFinal: true, 0: { transcript: text } } } }), text);
-        nextInput += interval;
+        nextInput += process.env.PITCH_TEXTS_FILE ? text.trim().split(/\s+/).length * 60000 / wordsPerMinute : interval;
       }
       if (Date.now() >= nextSample) {
         const sample = await page.evaluate(() => ({ heap: performance.memory?.usedJSHeapSize ?? null, caption: document.querySelector('.live-captions')?.textContent, toast: document.querySelector('.toast')?.textContent || '', health: document.querySelector('.avatar-health')?.textContent, playing: window.pitchEvents.filter(event => event.type === 'neotalk:playing').length }));
@@ -190,6 +196,7 @@ const summarize = values => {
     ledger.externalEvents = externalEvents;
     check(normalize(ledger.batches.map(batch => batch.text).join(' ')) === normalize(ledger.input.map(item => item.text).join(' ')), 'Every input word persisted in order, no discarded transcript');
     check(ledger.batches.every(batch => batch.status === 'done'), 'Every admitted batch completed');
+    check(ledger.batches.every(batch => batch.text.split(/\s+/).length <= 12), 'Every animation job is limited to twelve source words');
     check(maxTranslateConcurrent <= 2, 'Translation concurrency stayed bounded at two');
     check(ledger.events.filter(event => event.type === 'neotalk:ready').length === primaryReady, 'Primary runtime never reinitialized');
     check(externalEvents.filter(event => event.type === 'neotalk:ready').length === externalReady, 'External runtime never reinitialized');
@@ -212,7 +219,15 @@ const summarize = values => {
     ledger.metrics = { inputWords: ledger.input.reduce((sum, item) => sum + item.text.split(/\s+/).length, 0), actualInputDurationMs: ledger.input.at(-1).at - ledger.input[0].at, maxTranslateConcurrent, drainMs: ledger.batches.at(-1).updates.find(update => update.status === 'done').at - drainStarted,
       translationLatencyMs: summarize(ledger.translations.filter(item => item.status === 200).map(item => item.ended - item.started)),
       batchCompletionLatencyMs: summarize(ledger.batches.map(batch => batch.updates.find(update => update.status === 'done').at - batch.at)) };
-    await page.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
+    const ends = ledger.events.filter(e => e.type === 'neotalk:playback-frame' && e.status === 'finished');
+    const starts = ledger.events.filter(e => e.type === 'neotalk:playback-frame' && e.status === 'started');
+    ledger.metrics.handoffGapMs = summarize(ends.map(end => starts.find(start => start.at > end.at && start.loadId !== end.loadId)?.at - end.at).filter(Number.isFinite));
+    await popup.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
+    await page.getByRole('button', { name: 'Iniciar sala ao vivo', exact: true }).waitFor();
+    await popup.getByRole('button', { name: 'Iniciar sala', exact: true }).click();
+    await page.getByRole('button', { name: 'Encerrar sala', exact: true }).waitFor();
+    check(true,'Mini-player can stop and restart the room');
+    await popup.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
     ledger.result = 'PASS'; console.log('FINAL', ledger.metrics);
   } catch (error) {
     ledger.result = 'FAIL'; ledger.failure = { message: error.message, stack: error.stack };
