@@ -155,7 +155,7 @@ const summarize = values => {
     const pop = context.waitForEvent('page');
     await page.getByRole('button', { name: /Mini-player flutuante/ }).click(); popup = await pop;
     await page.waitForFunction(() => !!window.pitchRecognition);
-    check(await popup.getByRole('button', {name:'Encerrar sala',exact:true}).isVisible(), 'Opening mini-player starts capture and exposes room control');
+    check(await popup.getByRole('button', {name:'Encerrar sala',exact:true}).isHidden(), 'Opening mini-player starts capture and hides the end control');
     await popup.waitForFunction(() => window.pitchEvents?.some(event => event.type === 'neotalk:ready'), null, { timeout: 120000 });
     trackingStart = Date.now();
     const primaryReady = await page.evaluate(() => window.pitchEvents.filter(event => event.type === 'neotalk:ready').length);
@@ -222,12 +222,14 @@ const summarize = values => {
     const ends = ledger.events.filter(e => e.type === 'neotalk:playback-frame' && e.status === 'finished');
     const starts = ledger.events.filter(e => e.type === 'neotalk:playback-frame' && e.status === 'started');
     ledger.metrics.handoffGapMs = summarize(ends.map(end => starts.find(start => start.at > end.at && start.loadId !== end.loadId)?.at - end.at).filter(Number.isFinite));
-    await popup.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
+    await page.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
     await page.getByRole('button', { name: 'Iniciar sala ao vivo', exact: true }).waitFor();
     await popup.getByRole('button', { name: 'Iniciar sala', exact: true }).click();
     await page.getByRole('button', { name: 'Encerrar sala', exact: true }).waitFor();
-    check(true,'Mini-player can stop and restart the room');
-    await popup.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
+    check(true,'Mini-player offers start after the main room is stopped');
+    await popup.close();
+    await page.getByRole('button', { name: 'Iniciar sala ao vivo', exact: true }).waitFor();
+    check(true,'Closing mini-player finishes the room');
     ledger.result = 'PASS'; console.log('FINAL', ledger.metrics);
   } catch (error) {
     ledger.result = 'FAIL'; ledger.failure = { message: error.message, stack: error.stack };

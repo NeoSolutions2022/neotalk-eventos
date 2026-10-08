@@ -232,6 +232,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 .live-stage.compact:fullscreen .live-captions { left: max(5%, env(safe-area-inset-left)); right: max(5%, env(safe-area-inset-right)); bottom: max(34px, env(safe-area-inset-bottom)); }
 .stage-brand { position: absolute; z-index: 2; top: 18px; left: 20px; color: white; font-size: 15px; pointer-events: none; }.stage-brand strong { color: var(--cyan); }
 .stage-language { position: absolute; z-index: 2; top: 17px; right: 20px; color: #c5d1e0; font-size: 9px; font-weight: 700; pointer-events: none; }
+.stage-language.presentation-disclosure { top: 48px; right: 16px; max-width: calc(100% - 32px); padding: 6px 9px; border: 1px solid #ffffff38; border-radius: 8px; color: #eff6ff; background: #071423d9; font: 600 11px/1.4 system-ui; text-align: right; }
+.presentation-config > small { display: block; margin-top: 12px; color: #64748b; line-height: 1.5; }
+.presentation-config > p { color: #a33136; font-size: 12px; line-height: 1.5; }
+.presentation-config .output-button:disabled { opacity: .65; cursor: not-allowed; }
 .figure.large { width: 260px; height: 320px; transform: translate(-50%, -43%) scale(1.5); }
 .figure.large .head { background: linear-gradient(135deg, #c8d4df, #6b8194); }
 .live-captions { z-index: 2; left: 8%; right: 8%; bottom: 24px; padding: 14px 22px; font-size: 14px; line-height: 1.5; pointer-events: none; }

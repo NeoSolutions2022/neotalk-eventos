@@ -7,6 +7,7 @@ import { ApiError, apiRequest } from "./apiClient";
 import { batchFlushDelayMs, LIVE_IDLE_LOOP_GAP_MS, matchesActivePhrase, playbackDurationMs } from "./liveTiming";
 import { LiveSessionScope, OrderedTranscriptBuffer, retryLiveRequest } from "./liveResilience";
 import { playbackComplete } from "./playbackCompletion.mjs";
+import { buildPresentationPhrases, PresentationShuffle, PRESENTATION_DISCLOSURE } from "./presentationDeck";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -29,7 +30,7 @@ type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number;
 type NativePlayback = { primaryId: string | null; externalId: string | null; primaryDone: boolean; externalDone: boolean; externalRequired: boolean; primaryFrame: number; externalFrame: number };
 const emptyNativePlayback = (): NativePlayback => ({ primaryId: null, externalId: null, primaryDone: false, externalDone: false, externalRequired: false, primaryFrame: -1, externalFrame: -1 });
 type SharedPose = { phrase: string; pose: { content_url: string; fps?: number; frame_count?: number }; words: string[]; loadId?: string; traceId?: string; taskId?: string };
-type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
+type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean; playlistId?: string };
 type PoseDiagnostic = { at: string; output: "principal" | "mini-player"; batchId: number | null; event: string; stage?: string; code?: string; loadId?: string; correlationId?: string; traceId?: string; taskId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
@@ -87,6 +88,18 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const externalCaptionRef = useRef<HTMLDivElement | null>(null);
   const externalRoomButtonRef = useRef<HTMLButtonElement | null>(null);
   const externalRoomActionRef = useRef<() => void>(() => {});
+  const externalLanguageRef = useRef<HTMLSpanElement | null>(null);
+  const externalCloseStopsRoomRef = useRef(false);
+  const presentationRef = useRef({ enabled: false, generation: 0, candidates: [] as string[], cursor: 0,
+    pending: new Map<string, number>(), ready: new Map<string, SharedPose>(), current: "", speechUntil: 0,
+    shuffle: new PresentationShuffle(), upcoming: [] as string[], controller: new AbortController(),
+    playlistId: "", primaryReady: false, externalReady: false, playing: false, capable: false });
+  const [presentationMode, setPresentationMode] = useState(false);
+  const [presentationLoading, setPresentationLoading] = useState(false);
+  const [presentationCount, setPresentationCount] = useState(0);
+  const [presentationTotal, setPresentationTotal] = useState(0);
+  const [presentationSize, setPresentationSize] = useState(64);
+  const [presentationError, setPresentationError] = useState("");
   const embeddedAvatarReadyRef = useRef(false);
   const externalAvatarReadyRef = useRef(false);
   const avatarSupportsSharedPoseRef = useRef(false);
@@ -248,6 +261,107 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     while (recentPosesRef.current.size > 8) recentPosesRef.current.delete(recentPosesRef.current.keys().next().value!);
   };
 
+  function warmPresentationLibrary() {
+    const demo = presentationRef.current;
+    if (!demo.enabled || !embeddedAvatarReadyRef.current || !avatarSupportsPrefetchRef.current) return;
+    while (demo.pending.size < 2 && demo.cursor < demo.candidates.length) {
+      const phrase = demo.candidates[demo.cursor++];
+      const generation = demo.generation;
+      const timer = window.setTimeout(() => {
+        if (!demo.enabled || demo.generation !== generation || !demo.pending.has(phrase)) return;
+        demo.pending.delete(phrase);
+        warmPresentationLibrary();
+      }, 45000);
+      demo.pending.set(phrase, timer);
+      frameRef.current?.contentWindow?.postMessage({ type: "neotalk:prefetch", phrase }, widgetOrigin);
+    }
+    if (!demo.pending.size && demo.cursor >= demo.candidates.length) {
+      if (demo.ready.size >= 2) preparePresentationPlayers();
+      else { setPresentationLoading(false); setPresentationError("Não foi possível preparar os sinais. Desative e tente novamente."); }
+    }
+  }
+
+  async function togglePresentationMode() {
+    if (!diagnostics || offline || listeningRef.current || startingRef.current) return;
+    const demo = presentationRef.current;
+    if (!demo.enabled && !demo.capable) { setPresentationError("Aguarde conectar e atualize o widget para usar apresentações."); return; }
+    demo.generation++;
+    demo.controller.abort();
+    demo.controller = new AbortController();
+    for (const timer of demo.pending.values()) window.clearTimeout(timer);
+    demo.pending.clear(); demo.ready.clear(); demo.current = ""; demo.speechUntil = 0;
+    if (demo.enabled) sendToAvatar({ type: "neotalk:stop-presentation" });
+    demo.playlistId = ""; demo.primaryReady = false; demo.externalReady = false; demo.playing = false;
+    demo.candidates = []; demo.cursor = 0; demo.shuffle = new PresentationShuffle(); demo.upcoming = [];
+    setPresentationCount(0); setPresentationTotal(0); setPresentationError("");
+    if (demo.enabled) {
+      demo.enabled = false; setPresentationMode(false); setPresentationLoading(false);
+      return;
+    }
+    demo.enabled = true; setPresentationMode(true); setPresentationLoading(true);
+    const generation = demo.generation;
+    const signal = demo.controller.signal;
+    try {
+      // This admin-only endpoint enforces the role server-side. No public
+      // switch, query parameter or localStorage flag grants this mode.
+      const catalog: string[] = [];
+      for (let page = 1; ; page++) {
+        const result = await roomApi<{ items: string[]; has_next: boolean }>(`/admin/pose-words?page=${page}&page_size=500`, { signal });
+        if (!demo.enabled || demo.generation !== generation) return;
+        catalog.push(...result.items);
+        if (!result.has_next) break;
+        if (page >= 16) throw new Error("O catálogo excede o limite de preparação.");
+      }
+      const candidates = buildPresentationPhrases(catalog);
+      const selection = new PresentationShuffle();
+      demo.candidates = Array.from({ length: Math.min(presentationSize, candidates.length) }, () => selection.next(candidates)!);
+      if (!demo.candidates.length) throw new Error("Sincronize ao menos dois sinais do dataset antes de preparar a demonstração.");
+      setPresentationTotal(demo.candidates.length);
+      warmPresentationLibrary();
+    } catch (reason) {
+      if (demo.generation !== generation || signal.aborted) return;
+      demo.enabled = false; setPresentationMode(false); setPresentationLoading(false);
+      setPresentationError(reason instanceof Error ? reason.message : "Não foi possível preparar a demonstração.");
+    }
+  }
+
+  function preparePresentationPlayers(externalOnly = false) {
+    const demo = presentationRef.current;
+    if (!demo.enabled || demo.ready.size < 2) return;
+    if (!demo.capable) { setPresentationError("Atualize o widget para usar o modo apresentação."); setPresentationLoading(false); return; }
+    if (!demo.playlistId) {
+      demo.playlistId = `presentation_${Date.now()}_${demo.generation}`;
+      const available = [...demo.ready.keys()];
+      demo.upcoming = available.map(() => demo.shuffle.next(available)!);
+    } else if (!externalOnly) return;
+    const message = { type: "neotalk:prepare-presentation", playlistId: demo.playlistId, poses: demo.upcoming.map(key => demo.ready.get(key)!.pose) };
+    if (!externalOnly) frameRef.current?.contentWindow?.postMessage(message, widgetOrigin);
+    if (externalAvatarReadyRef.current) externalWindowRef.current?.postMessage({ type: "neotalk:external-player-command", message }, window.location.origin);
+  }
+
+  function playPresentationPhrase() {
+    const demo = presentationRef.current;
+    if (!demo.enabled || !demo.primaryReady || !listeningRef.current || microphoneMutedRef.current || Date.now() > demo.speechUntil || demo.playing) return;
+    demo.playing = true;
+    sendToAvatar({ type: "neotalk:play" });
+    setAvatarStatus("Demonstração · sinais ilustrativos");
+  }
+
+  function notePresentationSpeech(text: string) {
+    if (!presentationRef.current.enabled || !listeningRef.current || microphoneMutedRef.current || !text.trim()) return;
+    presentationRef.current.speechUntil = Date.now() + 6000;
+    playPresentationPhrase();
+    clearIdleLoopTimer();
+    const timerWindow = externalWindowRef.current && !externalWindowRef.current.closed ? externalWindowRef.current : window;
+    idleLoopTimerWindowRef.current = timerWindow;
+    idleLoopTimerRef.current = timerWindow.setTimeout(() => {
+      if (!presentationRef.current.enabled || Date.now() < presentationRef.current.speechUntil) return;
+      presentationRef.current.playing = false;
+      sendToAvatar({ type: "neotalk:pause" });
+      setAvatarStatus("Demonstração · aguardando fala");
+    }, 6100);
+  }
+
   const prefetchNextBatch = () => {
     if (!embeddedAvatarReadyRef.current || !avatarSupportsPrefetchRef.current || !avatarBusyRef.current) return;
     const frame = frameRef.current?.contentWindow;
@@ -264,7 +378,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const poseCommandFor = (phrase: string): Record<string, unknown> => {
-    const cached = recentPosesRef.current.get(poseKey(phrase));
+    const cached = presentationRef.current.enabled ? presentationRef.current.ready.get(phrase) : recentPosesRef.current.get(poseKey(phrase));
     return cached && avatarSupportsSharedPoseRef.current ? { type: "neotalk:load-pose", ...cached } : { type: "neotalk:sign", phrase };
   };
 
@@ -357,6 +471,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const playIdleLoopPhrase = () => {
+    if (presentationRef.current.enabled) { playPresentationPhrase(); return; }
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
     if (!listeningRef.current || !avatarReadyRef.current || avatarBusyRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length) return;
@@ -381,6 +496,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const scheduleIdleLoop = (minimumDelay = LIVE_IDLE_LOOP_GAP_MS) => {
+    if (presentationRef.current.enabled) return;
     clearIdleLoopTimer();
     if (!listeningRef.current || activeBatchRef.current || pendingBatchesRef.current.length || wordBufferRef.current.length || !recentPhrasesRef.current.length) return;
     // Executado apenas pelo timer/evento de reprodução, nunca durante o render.
@@ -395,6 +511,11 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (!idleLoopActiveRef.current) return;
     idleLoopActiveRef.current = false;
     avatarBusyRef.current = false;
+    if (presentationRef.current.enabled) {
+      setAvatarStatus("Demonstração · aguardando fala");
+      playPresentationPhrase();
+      return;
+    }
     setAvatarStatus(`${avatarNames[avatar]} aguardando nova fala`);
     dispatchNextBatch();
     if (!avatarBusyRef.current) scheduleIdleLoop(LIVE_IDLE_LOOP_GAP_MS);
@@ -414,6 +535,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   function dispatchNextBatch() {
+    if (presentationRef.current.enabled) { playPresentationPhrase(); return; }
     if (!listeningRef.current) return;
     if (!avatarReadyRef.current || avatarBusyRef.current || !pendingBatchesRef.current.length) return;
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
@@ -645,7 +767,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const phrase = idleLoopActiveRef.current
       ? recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1]
       : activeBatchRef.current;
-    const text = phrase?.glossText || phrase?.text;
+    const text = presentationRef.current.enabled ? presentationRef.current.current : phrase?.glossText || phrase?.text;
     if (!text) {
       releaseAvatarAfterRetryFailure();
       return;
@@ -674,7 +796,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const phrase = idleLoopActiveRef.current
       ? recentPhrasesRef.current[idleLoopIndexRef.current === 0 ? recentPhrasesRef.current.length - 1 : idleLoopIndexRef.current - 1]
       : activeBatchRef.current;
-    const text = phrase?.glossText || phrase?.text;
+    const text = presentationRef.current.enabled ? presentationRef.current.current : phrase?.glossText || phrase?.text;
     if (!text) {
       releaseAvatarAfterRetryFailure();
       return;
@@ -757,6 +879,15 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const addTranscriptToBuffer = (text: string) => {
     if (!listeningRef.current || (microphoneMutedRef.current && !pressurePausedRef.current)) return;
+    if (presentationRef.current.enabled) {
+      const caption: LiveBatch = { id: ++batchIdRef.current, text, status: "done" };
+      // Keep genuine captions locally; illustrative gestures are never saved
+      // as translated batches, agent results or QA evaluations.
+      setCompletedHistory(history => [{ ...caption }, ...history].slice(0, 50));
+      setProcessedBatches(value => value + 1);
+      notePresentationSpeech(text);
+      return;
+    }
     const words = text.split(/\s+/).filter(Boolean);
     const remaining = LIVE_BUFFER_LIMIT - wordBufferRef.current.length;
     wordBufferRef.current.push(...words.slice(0, remaining));
@@ -779,6 +910,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const currentAvatarPhrase = () => {
+    if (presentationRef.current.enabled) return presentationRef.current.current;
     if (idleLoopActiveRef.current) {
       const recent = recentPhrasesRef.current;
       const index = idleLoopIndexRef.current === 0 ? recent.length - 1 : idleLoopIndexRef.current - 1;
@@ -807,6 +939,22 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (event.origin !== widgetOrigin || (!fromEmbeddedFrame && !fromExternalFrame)) return;
       const data = event.data as AvatarMessage;
       if (!data || typeof data !== "object" || Array.isArray(data)) return;
+      if (data.type === "neotalk:presentation-ready" || data.type === "neotalk:presentation-error") {
+        const demo = presentationRef.current;
+        if (!demo.enabled || data.playlistId !== demo.playlistId) return;
+        if (data.type === "neotalk:presentation-error") {
+          setPresentationError(data.message || "Não foi possível preparar a sequência ilustrativa.");
+          setPresentationLoading(false);
+          return;
+        }
+        if (fromExternalFrame) {
+          demo.externalReady = true;
+          if (demo.playing && listeningRef.current && !microphoneMutedRef.current && Date.now() <= demo.speechUntil) externalWindowRef.current?.postMessage({ type: "neotalk:external-player-command", message: { type: "neotalk:play" } }, window.location.origin);
+        } else { demo.primaryReady = true; setPresentationLoading(false); }
+        playPresentationPhrase();
+        return;
+      }
+      if (data.type === "neotalk:presentation-frame") return;
       if (["neotalk:pose-stage", "neotalk:pose-ready", "neotalk:playing", "neotalk:error"].includes(data.type || "")) {
         recordPoseDiagnostic(fromExternalFrame ? "mini-player" : "principal", data);
       }
@@ -828,6 +976,11 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
             }
           }
           externalSupportsNativePlaybackRef.current = process.env.NEXT_PUBLIC_NATIVE_PLAYBACK_COMPLETION !== "false" && Array.isArray(data.capabilities) && data.capabilities.includes("native-playback-progress");
+          if (presentationRef.current.enabled && presentationRef.current.playlistId) {
+            if (!data.capabilities?.includes("presentation-playlist")) setPresentationError("Atualize o widget do mini-player para reproduzir apresentações.");
+            else preparePresentationPlayers(true);
+            return;
+          }
           if (latestPoseRef.current && externalSupportsSharedPoseRef.current) sendSharedPoseToExternal(latestPoseRef.current);
           else if (!externalSupportsSharedPoseRef.current) {
             const phrase = activeBatchRef.current?.glossText || activeBatchRef.current?.text || latestPoseRef.current?.phrase;
@@ -857,6 +1010,16 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       }
 
       if (data.type === "neotalk:prefetch-ready" && data.phrase && data.pose?.content_url) {
+        const demo = presentationRef.current;
+        if (demo.enabled && demo.pending.has(data.phrase)) {
+          window.clearTimeout(demo.pending.get(data.phrase)!);
+          demo.pending.delete(data.phrase);
+          demo.ready.set(data.phrase, { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [], loadId: data.loadId, taskId: data.taskId, traceId: data.traceId });
+          setPresentationCount(demo.ready.size);
+          warmPresentationLibrary(); playPresentationPhrase();
+          return;
+        }
+        if (demo.enabled) return;
         const key = poseKey(data.phrase);
         prefetchingPhrasesRef.current.delete(key);
         const startedAt = prefetchStartedAtRef.current.get(key);
@@ -877,6 +1040,12 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         return;
       }
       if (data.type === "neotalk:prefetch-error") {
+        const demo = presentationRef.current;
+        if (demo.enabled && data.phrase && demo.pending.has(data.phrase)) {
+          window.clearTimeout(demo.pending.get(data.phrase)!); demo.pending.delete(data.phrase);
+          warmPresentationLibrary();
+          return;
+        }
         if (data.phrase) {
           const key = poseKey(data.phrase);
           prefetchingPhrasesRef.current.delete(key);
@@ -903,6 +1072,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         avatarSupportsSharedPoseRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("shared-pose");
         avatarSupportsPrefetchRef.current = Array.isArray(data.capabilities) && data.capabilities.includes("prefetch");
         avatarSupportsNativePlaybackRef.current = process.env.NEXT_PUBLIC_NATIVE_PLAYBACK_COMPLETION !== "false" && Array.isArray(data.capabilities) && data.capabilities.includes("native-playback-progress");
+        presentationRef.current.capable = Array.isArray(data.capabilities) && data.capabilities.includes("presentation-playlist");
+        warmPresentationLibrary();
         setAvatarReady(true);
         setAvatarError("");
         setAvatarStatus(`${avatarNames[avatar]} conectada`);
@@ -1162,6 +1333,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   recoverFallbackCaptureRef.current = () => { void recoverFallbackCapture(); };
 
   const selectAvatar = (value: AvatarId) => {
+    if (presentationRef.current.enabled) { showToast("Desative a apresentação antes de trocar o avatar."); return; }
     if (offline && value !== "elia") { showToast("O pacote offline instalado contém somente a Elia."); return; }
     latestPoseRef.current = null;
     recentPosesRef.current.clear();
@@ -1216,6 +1388,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const stopLiveRoom = () => {
     listeningRef.current = false;
+    presentationRef.current.speechUntil = 0;
+    presentationRef.current.current = "";
+    presentationRef.current.playing = false;
     sessionScopeRef.current.end();
     microphoneMutedRef.current = false;
     pressurePausedRef.current = false;
@@ -1275,6 +1450,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const startLiveRoom = async () => {
     if (startingRef.current || listeningRef.current) return;
+    if (presentationRef.current.enabled && !presentationRef.current.primaryReady) {
+      showToast("Aguarde a preparação dos sinais da demonstração antes de iniciar.");
+      return;
+    }
     startingRef.current = true;
     setStarting(true);
     const signal = sessionScopeRef.current.begin();
@@ -1426,6 +1605,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
           }
         }
         setInterimCaption(interim.trim());
+        notePresentationSpeech(interim);
       };
       recognition.onerror = (event) => {
         if (event.error === "service-not-allowed" || event.error === "network") {
@@ -1508,6 +1688,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const button = externalRoomButtonRef.current;
     if (!button) return;
     button.textContent = starting ? "Iniciando…" : recording ? "Encerrar sala" : "Iniciar sala";
+    button.hidden = recording;
     button.disabled = starting || (!recording && !captureAvailable);
   }, [recording, starting, captureAvailable, externalPlayerMode]);
 
@@ -1519,6 +1700,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
     const nextMuted = !microphoneMutedRef.current;
     microphoneMutedRef.current = nextMuted;
+    if (nextMuted && presentationRef.current.enabled) {
+      presentationRef.current.speechUntil = 0; presentationRef.current.playing = false;
+      clearIdleLoopTimer(); sendToAvatar({ type: "neotalk:pause" });
+    }
     setMicrophoneMuted(nextMuted);
     if (nextMuted) {
       if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
@@ -1588,8 +1773,20 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       : "Inicie a sala para capturar o microfone e gerar legendas.";
   }, [interimCaption, lastCaption, microphoneMuted, recording]);
 
+  useEffect(() => {
+    if (externalLanguageRef.current) {
+      externalLanguageRef.current.textContent = presentationMode ? PRESENTATION_DISCLOSURE : "PT → LIBRAS";
+      externalLanguageRef.current.className = `stage-language ${presentationMode ? "presentation-disclosure" : ""}`;
+    }
+  }, [presentationMode, externalPlayerMode]);
+
   useEffect(() => () => {
     listeningRef.current = false;
+    presentationRef.current.enabled = false;
+    presentationRef.current.generation++;
+    presentationRef.current.controller.abort();
+    for (const timer of presentationRef.current.pending.values()) window.clearTimeout(timer);
+    presentationRef.current.pending.clear(); presentationRef.current.ready.clear();
     sessionScopeRef.current.end();
     recognitionRef.current?.abort();
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
@@ -1605,6 +1802,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
+    externalLanguageRef.current = null;
     externalRoomButtonRef.current = null;
     externalCurrentPoseRef.current = null;
     externalPoseRecoveryRef.current = { correlationId: "", attempts: 0 };
@@ -1629,6 +1827,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalWindowRef.current = null;
     externalFrameRef.current = null;
     externalCaptionRef.current = null;
+    externalLanguageRef.current = null;
     externalRoomButtonRef.current = null;
     externalCurrentPoseRef.current = null;
     externalPoseRecoveryRef.current = { correlationId: "", attempts: 0 };
@@ -1640,7 +1839,13 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     setExternalPlayerMode(null);
   };
 
-  const mountStageInWindow = async (targetWindow: Window, mode: "pip" | "window") => {
+  const handleExternalPlayerClosed = (targetWindow: Window) => {
+    if (externalWindowRef.current !== targetWindow) return;
+    if (externalCloseStopsRoomRef.current && (listeningRef.current || startingRef.current)) stopLiveRoom();
+    restoreStage(targetWindow);
+  };
+
+  const mountStageInWindow = async (targetWindow: Window, mode: "pip" | "window", closeStopsRoom = mode === "pip") => {
     const targetDocument = targetWindow.document;
     const messageHandler = avatarMessageHandlerRef.current;
     if (messageHandler) targetWindow.addEventListener("message", messageHandler);
@@ -1660,6 +1865,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       .neotalk-output-shell .avatar-widget-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
       .neotalk-output-shell .exit-fullscreen { display: none !important; }
       .external-room-control { position:absolute; right:12px; top:42px; z-index:10; border:1px solid #ffffff55; border-radius:8px; background:#071423dd; color:white; padding:8px 12px; cursor:pointer; font:600 13px system-ui; }
+      .external-room-control[hidden] { display:none; }
     `;
     targetDocument.head.appendChild(outputStyles);
     await new Promise<void>((resolve, reject) => {
@@ -1691,12 +1897,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       ? (microphoneMuted ? (lastCaption || "Microfone mutado · mantendo a tradução em loop") : (interimCaption || lastCaption || "Ouvindo…"))
       : "Inicie a sala para capturar o microfone e gerar legendas.";
     const language = targetDocument.createElement("span");
-    language.className = "stage-language";
-    language.textContent = "PT → LIBRAS";
+    language.className = `stage-language ${presentationRef.current.enabled ? "presentation-disclosure" : ""}`;
+    language.textContent = presentationRef.current.enabled ? PRESENTATION_DISCLOSURE : "PT → LIBRAS";
+    externalLanguageRef.current = language;
     const roomButton = targetDocument.createElement("button");
     roomButton.type = "button";
     roomButton.className = "external-room-control";
     roomButton.textContent = listeningRef.current ? "Encerrar sala" : "Iniciar sala";
+    roomButton.hidden = listeningRef.current;
     roomButton.addEventListener("click", () => externalRoomActionRef.current());
     externalRoomButtonRef.current = roomButton;
     outputStage.append(outputFrame, brand, caption, language, roomButton);
@@ -1704,6 +1912,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     targetDocument.body.replaceChildren(shell);
 
     externalWindowRef.current = targetWindow;
+    externalCloseStopsRoomRef.current = closeStopsRoom;
     if (!avatarBusyRef.current) scheduleIdleLoop();
     externalFrameRef.current = outputFrame;
     externalCaptionRef.current = caption;
@@ -1712,7 +1921,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     externalAvatarReadyRef.current = false;
     externalSupportsSharedPoseRef.current = false;
     setExternalPlayerMode(mode);
-    targetWindow.addEventListener("pagehide", () => restoreStage(targetWindow), { once: true });
+    targetWindow.addEventListener("pagehide", () => handleExternalPlayerClosed(targetWindow), { once: true });
     const outputUrl = new URL(widgetUrl);
     outputUrl.searchParams.set("avatar", avatar);
     outputFrame.src = outputUrl.toString();
@@ -1722,7 +1931,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const closeExternalPlayer = () => {
     const outputWindow = externalWindowRef.current;
-    restoreStage(outputWindow || undefined);
+    if (outputWindow) handleExternalPlayerClosed(outputWindow);
     if (outputWindow && !outputWindow.closed) outputWindow.close();
   };
 
@@ -1751,7 +1960,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       const popup = window.open("", "neotalk-live-output", "popup=yes,width=720,height=540,resizable=yes,scrollbars=no");
       if (!popup) throw new Error("O navegador bloqueou a nova janela.");
       try {
-        await mountStageInWindow(popup, "window");
+        await mountStageInWindow(popup, "window", preference === "pip");
       } catch (reason) {
         popup.close();
         throw reason;
@@ -1790,7 +1999,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const visibleBatches = panelTab === "captions"
     ? [...batches.filter((batch) => batch.status !== "done"), ...completedHistory]
-    : batches;
+    : presentationMode ? completedHistory.slice(0, 4) : batches;
   return <>
     <div className="studio-heading">
       <div>{!offline && <button className="back" aria-label="Voltar para salas" onClick={() => { window.location.href = "/salas"; }}>←</button>}<div><p className="eyebrow">TRADUÇÃO EM TEMPO REAL</p><h1>Sala ao vivo</h1></div></div>
@@ -1805,12 +2014,19 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
           <div className="fullscreen-zoom" aria-label="Zoom da transmissão"><button aria-label="Diminuir zoom" onClick={() => adjustStageZoom(-0.1)}>−</button><button className="zoom-value" aria-label="Restaurar zoom para 100%" onClick={() => setStageZoom(1)}>{Math.round(stageZoom * 100)}%</button><button aria-label="Aumentar zoom" onClick={() => adjustStageZoom(0.1)}>+</button></div>
           <div className="stage-brand">neo<strong>talk</strong></div>
           <div className="live-captions" aria-live="polite">{recording ? (microphoneMuted ? (lastCaption || "Microfone mutado · mantendo a tradução em loop") : (interimCaption || lastCaption || "Ouvindo…")) : "Inicie a sala para capturar o microfone e gerar legendas."}</div>
-          <span className="stage-language">PT → LIBRAS</span>
+          <span className={`stage-language ${presentationMode ? "presentation-disclosure" : ""}`}>{presentationMode ? PRESENTATION_DISCLOSURE : "PT → LIBRAS"}</span>
         </div>
         <div className="capture-controls"><div className={`audio-source ${recording && !microphoneMuted ? "listening" : ""} ${microphoneMuted ? "muted" : ""}`}><span>{microphoneMuted ? "×" : "⌁"}</span><div><small>{microphoneMuted ? "MICROFONE MUTADO" : recording ? `MICROFONE CAPTURANDO · ${transcriptionEngine === "server" ? "MODO COMPATÍVEL" : "TEMPO REAL"}` : "ENTRADA DE ÁUDIO"}</small><b>{microphoneName}</b></div><span className="audio-level" aria-hidden="true"><i/><i/><i/><i/></span></div>{recording && <button className={`mute-button ${microphoneMuted ? "active" : ""}`} onClick={toggleMicrophone}>{microphoneMuted ? "Ativar microfone" : "Mutar microfone"}</button>}<button disabled={starting} className={recording ? "record stop" : "record"} onClick={toggleRecording}><i />{starting ? "Iniciando sala…" : recording ? "Encerrar sala" : "Iniciar sala ao vivo"}</button></div>
       </section>
       <aside className="studio-panel">
         <div className="panel-tabs"><button className={panelTab === "room" ? "active" : ""} onClick={() => setPanelTab("room")}>Sala</button><button className={panelTab === "captions" ? "active" : ""} onClick={() => setPanelTab("captions")}>Legenda</button></div>
+        {diagnostics && !offline && panelTab === "room" && <div className="config-block presentation-config">
+          <div className="block-title"><b>Modo apresentação · experimental</b><small>Legendas reais e sequências ilustrativas independentes da fala. Não é tradução em Libras.</small></div>
+          <label>Variedade da apresentação<select value={presentationSize} disabled={presentationMode || recording || starting} onChange={event => setPresentationSize(Number(event.target.value))}><option value={64}>Ampla · até 64 sequências</option><option value={40}>Intermediária · até 40 sequências</option><option value={24}>Preparação mais leve · até 24 sequências</option></select></label>
+          <button className={`output-button ${presentationMode ? "active-output" : ""}`} disabled={recording || starting} aria-pressed={presentationMode} onClick={() => void togglePresentationMode()}><span>▷</span><div><b>{presentationMode ? "Desativar apresentação" : "Preparar apresentação"}</b><small>{presentationMode ? `${presentationCount} de ${presentationTotal || "…"} sequências prontas${presentationLoading ? " · preparando" : ""}` : "Até 64 sequências do dataset · exclusivo do admin"}</small></div><i>{presentationMode ? "●" : "+"}</i></button>
+          {presentationMode && <small role="status">{recording ? "Os gestos acompanham a atividade da fala, não o significado das legendas." : "Aguarde concluir a preparação antes de iniciar. A fala continua a animação e o silêncio pausa, sem reiniciar a sequência."}</small>}
+          {presentationError && <p role="alert">{presentationError}</p>}
+        </div>}
         {panelTab === "room" && <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording || offline} onChange={(event) => selectAvatar(event.target.value as AvatarId)}>{!offline && <><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option></>}<option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>}
         <div className="config-block live-queue"><div className="block-title"><b>{panelTab === "captions" ? "Histórico de legendas" : "Tradução ao vivo"}</b><small>{panelTab === "captions" ? "Últimos 50 trechos concluídos desta sessão" : "Trechos contínuos · últimas frases mantêm o avatar ativo"} · {processedBatches} concluídos</small>{diagnostics && <span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span>}</div>{visibleBatches.length ? <div className="batch-list">{visibleBatches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "done" ? "CONCLUÍDO" : batch.status === "playing" ? "AGORA" : batch.status === "ready" ? "A SEGUIR" : "PREPARANDO"}</span><p>{batch.text}{diagnostics && batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? processedBatches ? "A tradução continua ouvindo." : "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
         <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Avatar e legendas continuam sincronizados em qualquer saída.</small></div>{externalPlayerMode ? <button className="output-button active-output" onClick={closeExternalPlayer}><span>×</span><div><b>Fechar saída externa</b><small>{externalPlayerMode === "pip" ? "Mini-player flutuante ativo" : "Janela separada ativa"}</small></div><i>●</i></button> : <><button className="output-button" onClick={() => void openExternalPlayer("pip")}><span>▣</span><div><b>Mini-player flutuante</b><small>Sempre visível e com tamanho ajustável</small></div><i>→</i></button><button className="output-button" onClick={() => void openExternalPlayer("window")}><span>↗</span><div><b>Abrir em outra janela</b><small>Para outra aba, monitor ou captura de janela</small></div><i>→</i></button></>}<button className="output-button" onClick={() => { setCameraGuideOpen((value) => !value); if (!externalPlayerMode) void openExternalPlayer("window"); }}><span>◎</span><div><b>Usar no Meet ou Zoom</b><small>Saída para OBS Virtual Camera</small></div><i>{cameraGuideOpen ? "−" : "+"}</i></button>{cameraGuideOpen && <div className="camera-guide"><b>Transformar em câmera</b><ol><li>No OBS, adicione uma fonte <strong>Captura de janela</strong>.</li><li>Selecione <strong>NeoTalk · Tradução em Libras</strong>.</li><li>Clique em <strong>Iniciar câmera virtual</strong>.</li><li>No Meet ou Zoom, escolha <strong>OBS Virtual Camera</strong>.</li></ol><small>O navegador não pode criar uma câmera do sistema sozinho. Sem OBS, compartilhe a janela NeoTalk como tela.</small></div>}<button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link direto</b><small>Somente avatar, sem as legendas da sala</small></div><i>→</i></button></div>

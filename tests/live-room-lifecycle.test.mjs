@@ -8,12 +8,12 @@ import ts from 'typescript';
 import { playbackComplete } from '../app/playbackCompletion.mjs';
 const compilerOptions = { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX };
 const sources = {};
-for (const name of ['LiveRoom', 'liveResilience', 'liveTiming', 'avatarMessages']) {
+for (const name of ['LiveRoom', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
   sources[name] = await readFile(new URL(`../app/${name}.${name === 'LiveRoom' ? 'tsx' : 'ts'}`, import.meta.url), 'utf8');
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { resolve, promise }; }
-function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } : path.includes('/batches') ? { id: 'batch-qa' } : {}) {
+function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } : path.includes('/batches') ? { id: 'batch-qa' } : {}, props = {}) {
   const calls = [], commands = [], externalCommands = [], toasts = [], timers = new Map(), listeners = new Map();
   const slots = []; let hook = 0, nextTimer = 0, recording = false;
   class ApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -39,29 +39,33 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     './apiClient': { ApiError, apiRequest: async (path, options = {}) => { calls.push({ path, options }); return handler(path, options); } },
   };
   context.require = name => modules[name];
-  for (const name of ['liveResilience', 'liveTiming', 'avatarMessages']) {
+  for (const name of ['liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
     context.exports = {};
-    vm.runInContext(ts.transpileModule(sources[name], { compilerOptions }).outputText, context, { filename: `${name}.ts` });
+    // Each CommonJS module owns its exports binding; global reuse breaks
+    // functions that refer to other exports of their own module.
+    context.moduleExports = context.exports;
+    vm.runInContext(`(function(exports) { ${ts.transpileModule(sources[name], { compilerOptions }).outputText} })(moduleExports);`, context, { filename: `${name}.ts` });
     modules[`./${name}`] = context.exports;
   }
   // Test-only exposure: no debug API is included in shipped component source.
-  const exposed = ['nativePlaybackRef', 'avatarSupportsNativePlaybackRef', 'externalSupportsNativePlaybackRef', 'handleNativePlaybackFrame', 'finishNativePlayback', 'startLiveRoom', 'stopLiveRoom', 'enqueueBatch', 'completeActiveBatch', 'runHeartbeat', 'sendToAvatar', 'playIdleLoopPhrase', 'queueFallbackTranscription', 'startFallbackChunk', 'fallbackStreamRef', 'fallbackTranscriptionQueueRef', 'fallbackTranscriptionInFlightRef',
+  const exposed = ['presentationRef', 'preparePresentationPlayers', 'togglePresentationMode', 'warmPresentationLibrary', 'playPresentationPhrase', 'notePresentationSpeech', 'finishIdleLoopPhrase', 'currentAvatarPhrase', 'externalRoomButtonRef', 'externalCloseStopsRoomRef', 'handleExternalPlayerClosed', 'nativePlaybackRef', 'avatarSupportsNativePlaybackRef', 'externalSupportsNativePlaybackRef', 'handleNativePlaybackFrame', 'finishNativePlayback', 'startLiveRoom', 'stopLiveRoom', 'enqueueBatch', 'completeActiveBatch', 'runHeartbeat', 'sendToAvatar', 'playIdleLoopPhrase', 'queueFallbackTranscription', 'startFallbackChunk', 'fallbackStreamRef', 'fallbackTranscriptionQueueRef', 'fallbackTranscriptionInFlightRef',
     'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
     'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
-  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')} };\n  return <>`);
+  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, presentationError };\n  return <>`);
   context.exports = {};
   vm.runInContext(ts.transpileModule(source, { compilerOptions }).outputText, context, { filename: 'LiveRoom.tsx' });
   const component = context.exports.default;
-  component({ recording, setRecording: value => { recording = value; }, time: '00:00', showToast: value => toasts.push(value) });
+  const render = () => { hook = 0; component({ recording, setRecording: value => { recording = value; }, time: '00:00', showToast: value => toasts.push(value), ...props }); };
+  render();
   const qa = context.qa;
   const frameWindow = { postMessage: command => commands.push(command) };
   qa.frameRef.current = { contentWindow: frameWindow };
   qa.embeddedAvatarReadyRef.current = true; qa.avatarReadyRef.current = true;
-  return { qa, calls, commands, externalCommands, toasts, timers, track, ApiError, navigator: context.navigator, context,
+  return { qa, calls, commands, externalCommands, toasts, timers, track, ApiError, navigator: context.navigator, context, render,
     message(data, source = frameWindow, origin = 'https://infra-avatar3d-oficial.k3p3ex.easypanel.host') { listeners.get('message')({ data, source, origin }); },
     external() { const externalFrame = {}; qa.externalFrameRef.current = { contentWindow: externalFrame };
-      qa.externalWindowRef.current = { closed: false, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, postMessage: command => externalCommands.push(command) };
+      qa.externalWindowRef.current = { closed: false, addEventListener() {}, removeEventListener() {}, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, postMessage: command => externalCommands.push(command) };
       qa.externalAvatarReadyRef.current = true; qa.externalSupportsSharedPoseRef.current = true; qa.avatarSupportsSharedPoseRef.current = true; return externalFrame; },
     get recording() { return recording; } };
 }
@@ -69,6 +73,7 @@ test('lookahead warms both upcoming poses once even when the first translation i
   const h = harness();
   h.qa.avatarBusyRef.current = true;
   h.qa.avatarSupportsPrefetchRef.current = true;
+  h.qa.presentationRef.current.capable = true;
   h.qa.pendingBatchesRef.current = [{id:1,status:'translating'}, {id:2,status:'ready',glossText:'AMIGO'}, {id:3,status:'ready',glossText:'APRENDER'}];
   h.qa.prefetchNextBatch(); h.qa.prefetchNextBatch();
   assert.equal(h.commands.filter(c => c.type === 'neotalk:prefetch').length, 1);
@@ -82,6 +87,99 @@ test('external room control starts capture and finishes the current room', async
   assert.equal(h.recording, false);
   assert.equal(h.qa.listeningRef.current, false);
   assert.ok(h.calls.some(c => c.path.endsWith('/finish')));
+});
+
+test('presentation cannot be enabled by a regular user or while recording', async () => {
+  const h = harness(); await h.qa.togglePresentationMode();
+  assert.equal(h.qa.presentationRef.current.enabled,false);
+  assert.ok(!h.calls.some(c => c.path.includes('/admin/pose-words')));
+  const admin = harness(undefined,{diagnostics:true}); admin.qa.listeningRef.current = true;
+  await admin.qa.togglePresentationMode();
+  assert.equal(admin.qa.presentationRef.current.enabled,false);
+});
+
+test('presentation warms a large paginated catalog two tasks at a time and does not animate before speech', async () => {
+  const h = harness(async path => path.includes('/admin/pose-words')
+    ? {items:Array.from({length:40},(_,i)=>`SINAL_${path.includes('page=1&') ? i : i+40}`),has_next:path.includes('page=1&')}
+    : {id:'qa'}, {diagnostics:true});
+  h.qa.avatarSupportsPrefetchRef.current = true;
+  h.qa.presentationRef.current.capable=true;
+  await h.qa.togglePresentationMode();
+  const demo = h.qa.presentationRef.current;
+  demo.capable=true;
+  h.render();
+  assert.equal(demo.candidates.length,64,JSON.stringify({calls:h.calls.map(c=>c.path),enabled:demo.enabled,error:h.context.qa.presentationError})); assert.equal(demo.pending.size,2);
+  assert.equal(h.commands.length,2);
+  for (const phrase of demo.candidates) h.message({type:'neotalk:prefetch-ready',phrase,pose:{content_url:'/test.pose',fps:30,frame_count:60},words:phrase.split(' '),loadId:phrase});
+  assert.equal(demo.ready.size,64); assert.equal(demo.pending.size,0);
+  const playlists=h.commands.filter(c=>c.type==='neotalk:prepare-presentation');
+  assert.equal(playlists.length,1);assert.equal(playlists[0].poses.length,64);
+  assert.ok(!h.commands.some(command=>command.type==='neotalk:play'));
+  h.message({type:'neotalk:presentation-ready',playlistId:demo.playlistId});
+  await h.qa.startLiveRoom();
+  assert.equal(h.commands.filter(c=>c.type==='neotalk:play').length,0,'microphone permission/start alone cannot trigger a gesture');
+  h.qa.addTranscriptToBuffer('Nossa apresentação possui legendas reais.');
+  assert.equal(h.commands.filter(c=>c.type==='neotalk:play').length,1);
+  assert.equal(h.qa.pendingBatchesRef.current.length,0);
+  assert.ok(!h.calls.some(c=>c.path==='/agent/translate'||c.path.includes('/batches')),'no invented translated batches or GPT requests');
+  const count=h.commands.length;
+  h.qa.notePresentationSpeech('continuando a fala');
+  assert.equal(h.commands.length,count,'continuing speech does not reload, restart or query poses');
+  demo.speechUntil=Date.now()-1; h.timers.get(h.qa.idleLoopTimerRef.current).fn();
+  assert.equal(h.commands.at(-1).type,'neotalk:pause');
+  h.qa.notePresentationSpeech('nova fala');
+  assert.equal(h.commands.at(-1).type,'neotalk:play');
+  h.qa.microphoneMutedRef.current=true;const mutedCount=h.commands.length;h.qa.notePresentationSpeech('não deve animar');
+  assert.equal(h.commands.length,mutedCount,'mute does not resume illustrative gestures');
+  h.qa.stopLiveRoom();
+});
+
+test('presentation prepares each output once, checks native readiness and only resumes on speech', async () => {
+  const h = harness(undefined,{diagnostics:true}); const external=h.external();
+  const demo=h.qa.presentationRef.current;
+  demo.enabled=true; demo.candidates=['AMIGO APRENDER','COMPRAR COMPREENDER']; demo.cursor=2;
+  for (const phrase of demo.candidates) demo.ready.set(phrase,{phrase,pose:{content_url:'/test.pose',fps:30,frame_count:60},words:phrase.split(' '),loadId:'prepared'});
+  demo.capable=true;
+  h.qa.preparePresentationPlayers();
+  assert.equal(h.externalCommands.filter(c=>c.message?.type==='neotalk:prepare-presentation').length,1);
+  await h.qa.startLiveRoom();assert.equal(h.recording,false,'cannot start before real native first-frame readiness');
+  h.message({type:'neotalk:presentation-ready',playlistId:'stale'});assert.equal(demo.primaryReady,false);
+  h.message({type:'neotalk:presentation-ready',playlistId:demo.playlistId});
+  await h.qa.startLiveRoom();h.qa.notePresentationSpeech('Teste de apresentação.');
+  assert.equal(h.externalCommands.filter(c=>c.message?.type==='neotalk:play').length,1);
+  h.message({type:'neotalk:presentation-ready',playlistId:demo.playlistId},external);
+  assert.equal(demo.externalReady,true);
+  assert.equal(h.externalCommands.filter(c=>c.message?.type==='neotalk:play').length,2,'late external ready resumes without reloading the main player');
+  assert.equal(h.commands.filter(c=>c.type==='neotalk:prepare-presentation').length,1);
+  h.qa.stopLiveRoom();
+});
+
+test('closing mini-player ends capture and room exactly once; normal separate output does not', async () => {
+  const h=harness(); h.external(); h.qa.externalCloseStopsRoomRef.current=true;
+  await h.qa.startLiveRoom(); const output=h.qa.externalWindowRef.current;
+  h.qa.handleExternalPlayerClosed(output); h.qa.handleExternalPlayerClosed(output); await flush();
+  assert.equal(h.recording,false); assert.equal(h.calls.filter(c=>c.path.endsWith('/finish')).length,1);
+  const separate=harness(); separate.external(); await separate.qa.startLiveRoom();
+  separate.qa.handleExternalPlayerClosed(separate.qa.externalWindowRef.current);
+  assert.equal(separate.recording,true); separate.qa.stopLiveRoom();
+});
+
+test('external end button is hidden during capture, start is available when inactive', async () => {
+  const h=harness(); const button={}; h.qa.externalRoomButtonRef.current=button;
+  await h.qa.startLiveRoom(); h.render(); assert.equal(button.hidden,true);
+  h.qa.stopLiveRoom(); h.render(); assert.equal(button.hidden,false); assert.equal(button.textContent,'Iniciar sala');
+});
+
+test('presentation disable and authorization failure cancel warming safely', async () => {
+  const h=harness(async path=>path.includes('/admin/')?{items:['AMIGO','APRENDER','COMPRAR'],has_next:false}:{id:'qa'},{diagnostics:true});
+  h.qa.avatarSupportsPrefetchRef.current=true; h.qa.presentationRef.current.capable=true; await h.qa.togglePresentationMode();
+  const phrases=[...h.qa.presentationRef.current.pending.keys()];
+  await h.qa.togglePresentationMode();
+  h.message({type:'neotalk:prefetch-ready',phrase:phrases[0],pose:{content_url:'/late.pose'}});
+  assert.equal(h.qa.presentationRef.current.enabled,false); assert.equal(h.qa.presentationRef.current.ready.size,0);
+  const denied=harness(async path=>{ if(path.includes('/admin/')) throw new Error('Sem permissão'); return {id:'qa'}; },{diagnostics:true});
+  denied.qa.presentationRef.current.capable=true;
+  await denied.qa.togglePresentationMode(); assert.equal(denied.qa.presentationRef.current.enabled,false);
 });
 test('loop counts already elapsed silence rather than adding another 2.2 seconds', () => {
   const h = harness();
