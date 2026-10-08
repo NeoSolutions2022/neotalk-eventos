@@ -25,5 +25,12 @@ test('shuffle avoids all repeats within a cycle and the previous 12 across cycle
 test('dataset additions participate and the simulated nature stays explicit', () => {
   const phrases = Array.from(buildPresentationPhrases(['amigo.pose', 'APRENDER','ACOMPANHAR']));
   assert.ok(phrases.some(phrase => phrase.includes('ACOMPANHAR')));
-  assert.match(PRESENTATION_DISCLOSURE,/Demonstração.*ilustrativos/);
+  assert.equal(PRESENTATION_DISCLOSURE,'Modo demonstração');
+});
+
+test('presentation controls are concise while retaining an accessible selector and mode indicator', async () => {
+  const room = await readFile(new URL('../app/LiveRoom.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(room,/Modo apresentação · experimental|Variedade da apresentação|Não é tradução em Libras|não o significado das legendas|sinais ilustrativos/);
+  assert.match(room,/aria-label="Quantidade de sequências da apresentação"/);
+  assert.match(room,/presentationMode \? PRESENTATION_DISCLOSURE : "PT → LIBRAS"/);
 });

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-08 — Textos da apresentação
+
+- Controles simplificados: título **Apresentação**, seletor acessível de
+  24/40/64 sequências e botão de preparação, sem explicações repetidas.
+- Indicação compacta **Modo demonstração** nos players, sem o texto
+  “sinais ilustrativos”. Funcionamento e tradução padrão inalterados.
+- Build e 88 testes Node aprovados. Ajuste somente na plataforma.
+
 ## 2026-10-08 — Apresentação ilustrativa experimental
 
 - Modo separado e opcional, exclusivo do admin, ativado pelo botão

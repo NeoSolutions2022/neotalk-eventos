@@ -344,7 +344,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (!demo.enabled || !demo.primaryReady || !listeningRef.current || microphoneMutedRef.current || Date.now() > demo.speechUntil || demo.playing) return;
     demo.playing = true;
     sendToAvatar({ type: "neotalk:play" });
-    setAvatarStatus("Demonstração · sinais ilustrativos");
+    setAvatarStatus("Modo demonstração");
   }
 
   function notePresentationSpeech(text: string) {
@@ -943,7 +943,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         const demo = presentationRef.current;
         if (!demo.enabled || data.playlistId !== demo.playlistId) return;
         if (data.type === "neotalk:presentation-error") {
-          setPresentationError(data.message || "Não foi possível preparar a sequência ilustrativa.");
+          setPresentationError(data.message || "Não foi possível preparar a apresentação.");
           setPresentationLoading(false);
           return;
         }
@@ -2021,10 +2021,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       <aside className="studio-panel">
         <div className="panel-tabs"><button className={panelTab === "room" ? "active" : ""} onClick={() => setPanelTab("room")}>Sala</button><button className={panelTab === "captions" ? "active" : ""} onClick={() => setPanelTab("captions")}>Legenda</button></div>
         {diagnostics && !offline && panelTab === "room" && <div className="config-block presentation-config">
-          <div className="block-title"><b>Modo apresentação · experimental</b><small>Legendas reais e sequências ilustrativas independentes da fala. Não é tradução em Libras.</small></div>
-          <label>Variedade da apresentação<select value={presentationSize} disabled={presentationMode || recording || starting} onChange={event => setPresentationSize(Number(event.target.value))}><option value={64}>Ampla · até 64 sequências</option><option value={40}>Intermediária · até 40 sequências</option><option value={24}>Preparação mais leve · até 24 sequências</option></select></label>
-          <button className={`output-button ${presentationMode ? "active-output" : ""}`} disabled={recording || starting} aria-pressed={presentationMode} onClick={() => void togglePresentationMode()}><span>▷</span><div><b>{presentationMode ? "Desativar apresentação" : "Preparar apresentação"}</b><small>{presentationMode ? `${presentationCount} de ${presentationTotal || "…"} sequências prontas${presentationLoading ? " · preparando" : ""}` : "Até 64 sequências do dataset · exclusivo do admin"}</small></div><i>{presentationMode ? "●" : "+"}</i></button>
-          {presentationMode && <small role="status">{recording ? "Os gestos acompanham a atividade da fala, não o significado das legendas." : "Aguarde concluir a preparação antes de iniciar. A fala continua a animação e o silêncio pausa, sem reiniciar a sequência."}</small>}
+          <div className="block-title"><b>Apresentação</b></div>
+          <label><select aria-label="Quantidade de sequências da apresentação" value={presentationSize} disabled={presentationMode || recording || starting} onChange={event => setPresentationSize(Number(event.target.value))}><option value={64}>64 sequências</option><option value={40}>40 sequências</option><option value={24}>24 sequências</option></select></label>
+          <button className={`output-button ${presentationMode ? "active-output" : ""}`} disabled={recording || starting} aria-pressed={presentationMode} onClick={() => void togglePresentationMode()}><span>▷</span><div><b>{presentationMode ? "Desativar apresentação" : "Preparar apresentação"}</b>{presentationMode && <small>{`${presentationCount} de ${presentationTotal || "…"} sequências prontas${presentationLoading ? " · preparando" : ""}`}</small>}</div><i>{presentationMode ? "●" : "+"}</i></button>
+          {presentationMode && !recording && <small role="status">{presentationLoading ? "Preparando apresentação…" : "Apresentação pronta para iniciar."}</small>}
           {presentationError && <p role="alert">{presentationError}</p>}
         </div>}
         {panelTab === "room" && <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording || offline} onChange={(event) => selectAvatar(event.target.value as AvatarId)}>{!offline && <><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option></>}<option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>}

@@ -1,7 +1,7 @@
 // Illustrative gestures only: deliberately independent of the spoken captions.
 // Exact catalog membership avoids sending invented glosses to the pose service.
 export const PRESENTATION_LIMIT = 64;
-export const PRESENTATION_DISCLOSURE = "Demonstração · sinais ilustrativos";
+export const PRESENTATION_DISCLOSURE = "Modo demonstração";
 const normalize = (value: string) => value.replace(/\.pose$/i, "").replace(/\s+/g, " ").trim().toUpperCase();
 
 export function buildPresentationPhrases(catalog: string[]): string[] {

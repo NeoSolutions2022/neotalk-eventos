@@ -2,7 +2,7 @@
 
 Este modo NÃO traduz português para Libras. A transcrição é real, mas a animação
 é uma sequência ilustrativa independente do significado das legendas. O aviso
-“Demonstração · sinais ilustrativos” permanece na sala, na tela cheia e na saída
+“Modo demonstração” permanece na sala, na tela cheia e na saída
 externa. Não ocultar esse aviso ou apresentar a demonstração como tradução fiel.
 
 ## Operação
