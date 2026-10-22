@@ -36,7 +36,7 @@ type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: s
 type PoseDiagnostic = { at: string; output: "principal" | "mini-player"; batchId: number | null; event: string; stage?: string; code?: string; loadId?: string; correlationId?: string; traceId?: string; taskId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
-type AgentTranslation = { gloss_text: string; prompt_id?: string; model?: string; agent_latency_ms?: number; skipped?: boolean; reason?: string; timings_ms?: Record<string, unknown> };
+type AgentTranslation = { gloss_text: string; prompt_id?: string; model?: string; agent_latency_ms?: number; skipped?: boolean; reason?: string; timings_ms?: Record<string, unknown>; context_cache_hit?: boolean; catalog_word_count?: number };
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
@@ -616,6 +616,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       recordPoseDiagnostic("principal", { type: "neotalk:translation-ready", elapsedMs: Date.now() - translationStartedAt, attempt: translationAttempt }, batch.id);
       if (diagnostics) { telemetryRef.current.mark(batch.id, 'translation_ready'); telemetryRef.current.server(batch.id, agent.timings_ms); }
+      if (diagnostics) telemetryRef.current.context(batch.id, agent.context_cache_hit, agent.catalog_word_count);
       if (agent.skipped || !agent.gloss_text.trim()) {
         if (diagnostics) telemetryRef.current.outcome(batch.id, 'skipped');
         batch.status = "error";
@@ -724,7 +725,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         || packet.frame! < 0 || packet.frameCount! < 1 || packet.frame! >= packet.frameCount!) return;
     if (!["preparing", "started", "progress", "finished"].includes(data.status || "")) return;
     if (diagnostics && activeBatchRef.current && !idleLoopActiveRef.current) {
-      telemetryRef.current.frame(activeBatchRef.current.id, external ? 'external' : 'primary', data.loadId!, data.status!, packet.frame!, packet.frameCount!);
+      telemetryRef.current.frame(activeBatchRef.current.id, external ? 'external' : 'primary', data.loadId!, data.status!, packet.frame!, packet.frameCount!, pendingBatchesRef.current[0]?.status === 'ready');
     }
     if (data.status === "finished") {
       if (packet.frame !== packet.frameCount! - 1) return;

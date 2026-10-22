@@ -8,6 +8,11 @@ Na sala ao vivo, iniciar uma sessão, reproduzir o cenário e usar **Diagnóstic
 
 ## O que os números significam
 
+Revisão posterior em `PERF-03-OBS-01-2026-10-22.md`: o relatório também separa
+requisições por hit/miss de contexto, conta as palavras do catálogo fornecido
+e classifica transições conforme a próxima tradução já estava pronta. Isso
+não comprova preparação nativa da pose nem mede worker/download isoladamente.
+
 | Medida | Fronteiras |
 |---|---|
 | admission_to_agent_ms | lote admitido → início da requisição de tradução |

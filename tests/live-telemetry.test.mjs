@@ -35,6 +35,18 @@ test('invalid frame events cannot become evidence',()=>{
   for(const args of [['x','started',-1,3],['x','ready',0,3],['x','started',3,3],['','started',0,3]])t.frame(1,'primary',...args);
   assert.equal(t.snapshot().missing.firstFrame,1);
 });
+
+test('handoffs distinguish next translation ready from empty or untranslated queues without claiming native preparation',()=>{
+  const {t,at}=fixture();for(let i=1;i<=4;i++)t.admit(i,i);
+  t.frame(1,'primary','a','started',0,2);at(100);t.frame(1,'primary','a','finished',1,2,true);
+  at(150);t.frame(2,'primary','b','started',0,2);at(200);t.frame(2,'primary','b','finished',1,2,false);
+  at(900);t.frame(3,'primary','c','started',0,2);at(1000);t.frame(3,'primary','c','finished',1,2);
+  at(1200);t.frame(4,'primary','d','started',0,2);
+  const s=t.snapshot().handoff_by_translation_readiness;
+  assert.equal(s.primary.ready.mean,50);assert.equal(s.primary.notReady.mean,700);
+  assert.equal(s.primary.unreported.mean,200);assert.equal(s.external.ready.count,0);
+  assert.equal(t.snapshot().handoff_ms.primary.count,3);
+});
 test('bounded samples, privacy, pressure and cancellation remain explicit',()=>{
   const {t,at}=fixture(2);t.admit(1,1);t.admit(2,2);t.admit(3,3);t.input(12);at(400);t.input(5);
   t.pressure();t.rejected(6);t.reset();t.transcription(20,false);t.cancelPending();
@@ -46,6 +58,16 @@ test('bounded samples, privacy, pressure and cancellation remain explicit',()=>{
 });
 test('nearest-rank percentiles exclude invalid values',()=>{
   assert.deepEqual(plain(summarize([NaN,-1,10,20,30,Infinity])),{count:3,mean:20,p50:20,p95:30,max:30});
+});
+
+test('backend context cache groups and catalog size are explicit without storing the catalog',()=>{
+  const {t,at}=fixture();
+  for(let i=1;i<=3;i++){t.admit(i,i);t.mark(i,'translation_start');at(i*100);t.mark(i,'translation_ready');}
+  t.context(1,false,700);t.context(2,true,800);t.context(3,'not-a-boolean','private catalog');
+  const s=t.snapshot();assert.equal(s.translation_by_context_cache.hit.count,1);
+  assert.equal(s.translation_by_context_cache.miss.mean,100);assert.equal(s.translation_by_context_cache.unreported.count,1);
+  assert.equal(s.batches[1].catalogWordCount,800);assert.equal(s.batches[2].catalogWordCount,undefined);
+  assert.ok(!JSON.stringify(s).includes('private catalog'));
 });
 test('failed requests stay separate from successful requests and missing terminal frames remain explicit',()=>{
   const {t,at}=fixture();t.admit(1,1);t.mark(1,'translation_start');at(80);t.mark(1,'translation_failed');t.outcome(1,'error');

@@ -3,6 +3,7 @@ import time
 import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+from contextlib import asynccontextmanager
 
 import asyncpg
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
@@ -36,6 +37,7 @@ from .schemas import (
     QuickAccessIn,
 )
 from .services import (
+    NEOTALK_API_TIMEOUT_SECONDS,
     check_video,
     integration_status,
     invalidate_agent_context_cache,
@@ -44,6 +46,13 @@ from .services import (
     transcribe_audio,
     translate_to_glosses,
 )
+from .service_http import http_lifespan
+
+
+@asynccontextmanager
+async def api_lifespan(app: FastAPI):
+    async with http_lifespan((NEOTALK_API_TIMEOUT_SECONDS, 45)), lifespan(app):
+        yield
 
 def record_dict(record: asyncpg.Record) -> dict:
     return dict(record)
@@ -57,7 +66,7 @@ def cors_origins() -> list[str]:
 app = FastAPI(
     title="NeoTalk Live Rooms API",
     version="1.0.0",
-    lifespan=lifespan,
+    lifespan=api_lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
