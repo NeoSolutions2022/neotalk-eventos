@@ -216,9 +216,11 @@ def _openai_error_message(response: httpx.Response) -> str:
 
 
 async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
+    service_started = time.perf_counter()
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY não configurada no backend.")
     context, context_cache_hit = await _get_agent_context(pool)
+    context_ms = (time.perf_counter() - service_started) * 1000
     body = {
         "model": OPENAI_MODEL,
         "instructions": context.instructions,
@@ -276,7 +278,9 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
                 else:
                     detail = "O agente retornou conteúdo incompleto mesmo após uma nova tentativa."
                 raise HTTPException(status_code=502, detail=detail) from exc
-    latency_ms = round((time.perf_counter() - started) * 1000)
+    provider_ms = (time.perf_counter() - started) * 1000
+    latency_ms = round(provider_ms)
+    validation_started = time.perf_counter()
     if response_payload is None or result is None:
         raise HTTPException(status_code=502, detail="O agente não concluiu a tradução.")
     requested = [str(word).strip().upper() for word in result.get("glosses", []) if str(word).strip()]
@@ -295,6 +299,12 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
         "model": OPENAI_MODEL,
         "openai_response_id": response_payload.get("id"),
         "agent_latency_ms": latency_ms,
+        "timings_ms": {
+            "context_ms": context_ms,
+            "provider_ms": provider_ms,
+            "validation_ms": (time.perf_counter() - validation_started) * 1000,
+            "service_ms": (time.perf_counter() - service_started) * 1000,
+        },
         "context_cache_hit": context_cache_hit,
         "cached_input_tokens": ((response_payload.get("usage") or {}).get("input_tokens_details") or {}).get("cached_tokens", 0),
     }

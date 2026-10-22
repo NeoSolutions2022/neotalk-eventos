@@ -113,7 +113,7 @@ const summarize = values => {
       if (route.request().url().startsWith(widgetHost)) return route.fallback();
       const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
       const data = route.request().postData() ? route.request().postDataJSON() : {};
-      if (p.endsWith('/auth/me')) return route.fulfill({ json: { id: 'pitch-qa', name: 'QA Pitch', role: 'user', csrf_token: 'qa', onboarding_version: 1, password_set: true } });
+      if (p.endsWith('/auth/me')) return route.fulfill({ json: { id: 'pitch-qa', name: 'QA Pitch', role: process.env.PITCH_ADMIN === '1' ? 'admin' : 'user', csrf_token: 'qa', onboarding_version: 1, password_set: true } });
       if (p.endsWith('/agent/translate')) {
         const number = ++translationCounter, started = Date.now();
         const attempt = (translationAttempts.get(data.text) || 0) + 1; translationAttempts.set(data.text, attempt);
@@ -222,6 +222,16 @@ const summarize = values => {
     const ends = ledger.events.filter(e => e.type === 'neotalk:playback-frame' && e.status === 'finished');
     const starts = ledger.events.filter(e => e.type === 'neotalk:playback-frame' && e.status === 'started');
     ledger.metrics.handoffGapMs = summarize(ends.map(end => starts.find(start => start.at > end.at && start.loadId !== end.loadId)?.at - end.at).filter(Number.isFinite));
+    if (process.env.PITCH_ADMIN === '1') {
+      const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        page.getByRole('button', { name: /Baixar relatório de latência/ }).click(),
+      ]);
+      await download.saveAs(path.join(output, 'latency.json'));
+      const report = JSON.parse(await fs.readFile(path.join(output, 'latency.json'), 'utf8'));
+      check(report.telemetry.metrics.dispatch_to_first_frame_ms.count > 0, 'Admin report contains actual native first-frame timings');
+      check(report.telemetry.missing.serverTimings > 0, 'Mocked backend spans stay missing rather than becoming invented production measurements');
+    }
     await page.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
     await page.getByRole('button', { name: 'Iniciar sala ao vivo', exact: true }).waitFor();
     await popup.getByRole('button', { name: 'Iniciar sala', exact: true }).click();

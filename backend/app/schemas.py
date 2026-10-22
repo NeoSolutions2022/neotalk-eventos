@@ -103,6 +103,7 @@ class RoomDetail(RoomOut):
 
 
 class AgentTranslateIn(BaseModel):
+    trace_id: str | None = Field(default=None, max_length=96, pattern=r"^[A-Za-z0-9_-]+$")
     text: str = Field(min_length=1, max_length=2000)
     batch_id: UUID | None = None
 

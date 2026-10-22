@@ -1,14 +1,30 @@
 """Endpoint/SQL contract regression tests; PostgreSQL is mocked, not an integration DB."""
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 from fastapi import HTTPException
 from app.auth import CurrentUser
-from app.main import start_room, finish_room, create_batch, update_batch, heartbeat_room
-from app.schemas import RoomFinish, BatchCreate, BatchUpdate
+from app.main import start_room, finish_room, create_batch, update_batch, heartbeat_room, agent_translate
+from app.schemas import RoomFinish, BatchCreate, BatchUpdate, AgentTranslateIn
 
 
 class LiveRoomLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_translation_reports_endpoint_time_without_sending_trace_to_provider(self):
+        payload = AgentTranslateIn(text="Minha casa", trace_id="qa_1")
+        provider = AsyncMock(return_value={"gloss_text": "CASA", "timings_ms": {"provider_ms": 10}})
+        with patch("app.main.translate_to_glosses", provider):
+            result = await agent_translate(payload, self.pool, self.user)
+        provider.assert_awaited_once_with(self.pool, "Minha casa")
+        self.assertEqual(result["trace_id"], "qa_1")
+        self.assertEqual(result["timings_ms"]["provider_ms"], 10)
+        self.assertGreaterEqual(result["timings_ms"]["endpoint_ms"], 0)
+
+    async def test_skipped_translation_has_missing_provider_span_not_fabricated_zero(self):
+        with patch("app.main.translate_to_glosses", AsyncMock(side_effect=HTTPException(status_code=422, detail="Sem glosas"))):
+            result = await agent_translate(AgentTranslateIn(text="teste", trace_id="qa_2"), self.pool, self.user)
+        self.assertTrue(result["skipped"])
+        self.assertNotIn("provider_ms", result["timings_ms"])
+
     def setUp(self):
         self.room = uuid4()
         self.user = CurrentUser(id=uuid4(), name="QA", email=None, role="user", csrf_token="qa",

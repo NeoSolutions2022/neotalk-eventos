@@ -155,6 +155,10 @@ class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
             result = await services.translate_to_glosses(FakePool(), "Minha casa")
 
         self.assertEqual(result["gloss_text"], "CASA")
+        self.assertEqual(set(result["timings_ms"]), {"context_ms", "provider_ms", "validation_ms", "service_ms"})
+        self.assertTrue(all(value >= 0 for value in result["timings_ms"].values()))
+        self.assertEqual(round(result["timings_ms"]["provider_ms"]), result["agent_latency_ms"])
+        self.assertGreaterEqual(result["timings_ms"]["service_ms"], result["timings_ms"]["provider_ms"])
         self.assertEqual(result["openai_response_id"], "resp-ok")
         self.assertEqual([request["max_output_tokens"] for request in client.requests], [2500, 5000])
         self.assertTrue(client.requests[0]["prompt_cache_key"].startswith("neotalk-gloss-"))
