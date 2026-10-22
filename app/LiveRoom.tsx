@@ -32,7 +32,7 @@ type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number;
 type NativePlayback = { primaryId: string | null; externalId: string | null; primaryDone: boolean; externalDone: boolean; externalRequired: boolean; primaryFrame: number; externalFrame: number };
 const emptyNativePlayback = (): NativePlayback => ({ primaryId: null, externalId: null, primaryDone: false, externalDone: false, externalRequired: false, primaryFrame: -1, externalFrame: -1 });
 type SharedPose = { phrase: string; pose: { content_url: string; fps?: number; frame_count?: number }; words: string[]; loadId?: string; traceId?: string; taskId?: string };
-type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean; playlistId?: string };
+type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean; playlistId?: string; timingsMs?: unknown; poseCacheHit?: unknown };
 type PoseDiagnostic = { at: string; output: "principal" | "mini-player"; batchId: number | null; event: string; stage?: string; code?: string; loadId?: string; correlationId?: string; traceId?: string; taskId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
@@ -1066,6 +1066,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         const pending = pendingBatchesRef.current.find((batch) => batch.status === "ready" && poseKey(batch.glossText || "") === key);
         recordPoseDiagnostic("principal", { ...data, elapsedMs: startedAt ? Date.now() - startedAt : undefined }, pending?.id ?? null);
         if (data.avatar === avatar && pending) {
+          if (diagnostics) telemetryRef.current.pose(pending.id, data.timingsMs, data.poseCacheHit);
           prefetchedPosesRef.current.set(key, {
             phrase: data.phrase, pose: data.pose,
             words: Array.isArray(data.words) ? data.words.map(String) : [],
@@ -1097,6 +1098,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
       if (data.type === "neotalk:pose-ready" && data.phrase && data.pose?.content_url) {
         if (!isCurrentAvatarPhrase(data.phrase)) return;
+        if (diagnostics && activeBatchRef.current && !idleLoopActiveRef.current)
+          telemetryRef.current.pose(activeBatchRef.current.id, data.timingsMs, data.poseCacheHit);
         const shared: SharedPose = { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [], loadId: data.loadId, traceId: data.traceId, taskId: data.taskId };
         latestPoseRef.current = shared;
         if (shared.loadId) expectedPoseCorrelationRef.current = shared.loadId;

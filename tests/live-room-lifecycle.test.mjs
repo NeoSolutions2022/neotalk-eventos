@@ -90,6 +90,26 @@ test('regular users do not send trace IDs or collect telemetry', async () => {
   assert.equal(h.qa.telemetryRef.current.snapshot().batches.length,0);h.qa.stopLiveRoom();
 });
 
+test('only a current primary pose message attaches fetch spans to its translation batch',async()=>{
+ const h=harness(async p=>p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'},{diagnostics:true});
+ await h.qa.startLiveRoom();h.qa.enqueueBatch('teste');await flush();
+ const packet={type:'neotalk:pose-ready',avatar:'elia',phrase:'TESTE',pose:{content_url:'/pose'},loadId:'pose1',timingsMs:{total_ms:120,poll_wait_ms:20},poseCacheHit:true};
+ const external=h.external();h.message(packet,external);h.message({...packet,phrase:'ANTIGA'});
+ assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.count,0);
+ h.message(packet);h.message(packet);
+ const s=h.qa.telemetryRef.current.snapshot();assert.equal(s.pose_pipeline_ms.total_ms.count,1);assert.equal(s.pose_pipeline_ms.total_ms.mean,120);
+ assert.equal(s.batches[0].poseCacheHit,true);h.qa.stopLiveRoom();
+});
+
+test('matching prefetch spans are recorded before dispatch and presentation is excluded',()=>{
+ const h=harness(undefined,{diagnostics:true});h.qa.telemetryRef.current.begin('qa');h.qa.telemetryRef.current.admit(91,1);
+ h.qa.pendingBatchesRef.current=[{id:91,status:'ready',glossText:'AMIGO',text:'amigo'}];
+ const packet={type:'neotalk:prefetch-ready',avatar:'elia',phrase:'AMIGO',pose:{content_url:'/pose'},timingsMs:{total_ms:200}};
+ h.message(packet);assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.mean,200);
+ h.qa.telemetryRef.current.begin('demo');h.qa.telemetryRef.current.admit(91,1);h.qa.presentationRef.current.enabled=true;
+ h.message(packet);assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.count,0);
+});
+
 test('lookahead warms both upcoming poses once even when the first translation is pending', () => {
   const h = harness();
   h.qa.avatarBusyRef.current = true;

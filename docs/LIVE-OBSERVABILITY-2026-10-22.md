@@ -11,7 +11,9 @@ Na sala ao vivo, iniciar uma sessão, reproduzir o cenário e usar **Diagnóstic
 Revisão posterior em `PERF-03-OBS-01-2026-10-22.md`: o relatório também separa
 requisições por hit/miss de contexto, conta as palavras do catálogo fornecido
 e classifica transições conforme a próxima tradução já estava pronta. Isso
-não comprova preparação nativa da pose nem mede worker/download isoladamente.
+não comprova preparação nativa da pose. A subentrega posterior em
+`POSE-PIPELINE-OBSERVABILITY-2026-10-22.md` acrescenta spans observados de polling
+e download para o proxy; o worker continua sem instrumentação interna.
 
 | Medida | Fronteiras |
 |---|---|
@@ -39,7 +41,7 @@ As etapas contidas em outras NÃO devem ser somadas novamente. Os relógios do s
 - Até 512 lotes, 512 requisições de áudio e 1.024 transições. Expulsões ficam explícitas. Até quatro execuções por saída/lote.
 - A duração fila→frame não mede fim acústico da fala→frame. Web Speech não expõe tempo interno do reconhecimento.
 - Transição inclui silêncio/fila vazia e retomadas: interpretar com a carga aplicada. Repetições ociosas não entram nas amostras de tradução.
-- Sem spans internos da API de poses, worker e download, essa parcela ainda não pode ser atribuída individualmente.
+- Spans do widget/proxy dependem das duas versões compatíveis; fila e computação internas do worker continuam sem atribuição individual.
 - Erros sem resposta completa deixam spans ausentes; o tempo de uma tentativa bem-sucedida do servidor não representa tentativas anteriores.
 - A versão do widget fica `unreported`: não inferir versão publicada a partir do checkout local.
 - Modo apresentação é identificado separadamente; não serve como evidência de tradução real.

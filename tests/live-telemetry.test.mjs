@@ -74,3 +74,13 @@ test('failed requests stay separate from successful requests and missing termina
   const s=t.snapshot();assert.equal(s.metrics.translation_request_ms.count,0);assert.equal(s.metrics.translation_failed_request_ms.mean,80);
   assert.equal(s.missing.lastFrame,1);assert.equal(s.outcomes.error,1);
 });
+
+test('pose spans are allowlisted, absent on old widgets, and repeated delivery does not double count',()=>{
+ const {t}=fixture();t.admit(1,1);t.admit(2,2);
+ t.pose(1,{total_ms:1000,poll_wait_ms:300,proxy_download_ms:20,secret:'private',proxy_upstream_status_ms:NaN},false);
+ t.pose(1,{total_ms:99999},true);t.pose(2,{secret:'private',total_ms:-1},'invalid');
+ const s=t.snapshot();assert.equal(s.pose_pipeline_ms.total_ms.mean,1000);
+ assert.equal(s.pose_pipeline_ms.proxy_download_ms.mean,20);assert.equal(s.pose_pipeline_ms.proxy_upstream_status_ms.mean,null);
+ assert.equal(s.missing.poseTimings,1);assert.equal(s.batches[0].poseCacheHit,false);
+ assert.ok(!JSON.stringify(s).includes('private'));
+});

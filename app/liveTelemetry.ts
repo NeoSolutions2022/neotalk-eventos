@@ -7,10 +7,13 @@ export function summarize(values: number[]) {
 }
 type Point = 'admitted' | 'translation_start' | 'translation_ready' | 'translation_failed' | 'dispatched' | 'first_frame' | 'last_frame';
 type Stage = 'context_ms' | 'provider_ms' | 'validation_ms' | 'service_ms' | 'endpoint_ms';
+const POSE_STAGES = ['total_ms','submit_request_ms','poll_request_ms','poll_wait_ms','retry_wait_ms',
+  'proxy_upstream_submit_ms','proxy_upstream_status_ms','proxy_download_ms','proxy_validation_persist_ms','proxy_storage_lookup_ms'] as const;
+type PoseStage = typeof POSE_STAGES[number];
 type Execution = { output: 'primary'|'external'; loadId: string; first: number; last?: number };
 type Batch = { id: number; traceId: string; points: Partial<Record<Point,number>>; attempts: number;
   outcome?: 'complete'|'error'|'skipped'|'cancelled'; server: Partial<Record<Stage,number>>; executions: Execution[];
-  contextCacheHit?: boolean; catalogWordCount?: number };
+  contextCacheHit?: boolean; catalogWordCount?: number; pose?: Partial<Record<PoseStage,number>>; poseCacheHit?: boolean };
 const SERVER_STAGES: Stage[] = ['context_ms','provider_ms','validation_ms','service_ms','endpoint_ms'];
 export class LiveTelemetry {
   private rows = new Map<number,Batch>();
@@ -53,6 +56,13 @@ export class LiveTelemetry {
   context(id:number,hit:unknown,words:unknown){const row=this.rows.get(id);if(!row)return;
     if(typeof hit==='boolean')row.contextCacheHit=hit;
     if(typeof words==='number'&&Number.isSafeInteger(words)&&words>=0)row.catalogWordCount=words;}
+  pose(id:number,timing:unknown,cacheHit:unknown){const row=this.rows.get(id);
+    if(!row||row.pose||!timing||typeof timing!=='object'||Array.isArray(timing))return;
+    const safe:Partial<Record<PoseStage,number>>={};
+    for(const key of POSE_STAGES){const value=(timing as Record<string,unknown>)[key];
+      if(typeof value==='number'&&Number.isFinite(value)&&value>=0)safe[key]=value;}
+    if(!Object.keys(safe).length)return;
+    row.pose=safe;if(typeof cacheHit==='boolean')row.poseCacheHit=cacheHit;}
   outcome(id:number,value:Batch['outcome']){const row=this.rows.get(id);if(row)row.outcome=value;}
   pressure(){if(this.session)this.pressureCount++;}
   resumed(){if(this.session)this.resumeCount++;}
@@ -87,6 +97,7 @@ export class LiveTelemetry {
     return {schema:1,scope:'browser-received-native-frames; real service timings only when returned by backend',session:this.session,
       limits:{rows:this.capacity,evictedRows:this.evicted,asrSamples:512},metrics,
       server:Object.fromEntries(SERVER_STAGES.map(k=>[k,summarize(rows.flatMap(r=>r.server[k]===undefined?[]:[r.server[k]!]))])),
+      pose_pipeline_ms:Object.fromEntries(POSE_STAGES.map(k=>[k,summarize(rows.flatMap(r=>r.pose?.[k]===undefined?[]:[r.pose[k]!]))])),
       translation_by_context_cache:Object.fromEntries(['hit','miss','unreported'].map(group=>[group,summarize(rows.filter(r=>
         group==='hit'?r.contextCacheHit===true:group==='miss'?r.contextCacheHit===false:r.contextCacheHit===undefined
       ).flatMap(r=>r.points.translation_start!==undefined&&r.points.translation_ready!==undefined?[r.points.translation_ready-r.points.translation_start]:[]))])),
@@ -102,12 +113,12 @@ export class LiveTelemetry {
       input:{sourceWords:this.sourceWords,observedDurationMs:this.firstInput===null?null:this.lastInput!-this.firstInput},runtimeResets:this.resetCount,
       outcomes:{complete:rows.filter(r=>r.outcome==='complete').length,error:rows.filter(r=>r.outcome==='error').length,
         skipped:rows.filter(r=>r.outcome==='skipped').length,cancelled:rows.filter(r=>r.outcome==='cancelled').length,pending:rows.filter(r=>!r.outcome).length},
-      missing:{firstFrame:rows.filter(r=>r.points.first_frame===undefined).length,lastFrame:rows.filter(r=>r.points.last_frame===undefined).length,serverTimings:rows.filter(r=>r.server.endpoint_ms===undefined).length},
+      missing:{firstFrame:rows.filter(r=>r.points.first_frame===undefined).length,lastFrame:rows.filter(r=>r.points.last_frame===undefined).length,serverTimings:rows.filter(r=>r.server.endpoint_ms===undefined).length,poseTimings:rows.filter(r=>!r.pose).length},
       limitations:['No acoustic speech-end timestamp: admission-to-frame is NOT speech-to-frame.','Native event reception includes postMessage scheduling, not GPU frame time.',
-        'No internal pose API/worker/download spans until that service is instrumented.','Browser Web Speech ASR cannot expose server processing time.','Handoff includes empty-queue/idle time; translation readiness is NOT proof of native pose preparation.',
+        'Pose spans require compatible widget/proxy; absent values are not zero. Upstream request duration does NOT separate worker queue/compute.','Browser Web Speech ASR cannot expose server processing time.','Handoff includes empty-queue/idle time; translation readiness is NOT proof of native pose preparation.',
         'Bounded sample window; evictions and missing timings must be reported.'],
       batches:rows.map(r=>({traceId:r.traceId,attempts:r.attempts,outcome:r.outcome||'pending',points:r.points,server:r.server,
-        contextCacheHit:r.contextCacheHit,catalogWordCount:r.catalogWordCount,
+        contextCacheHit:r.contextCacheHit,catalogWordCount:r.catalogWordCount,pose:r.pose,poseCacheHit:r.poseCacheHit,
         executions:r.executions.map(e=>({output:e.output,first:e.first,last:e.last}))}))};
   }
 }
