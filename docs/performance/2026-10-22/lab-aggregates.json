@@ -1,0 +1,17 @@
+{
+  "scope": "Historical controlled evidence; not production and not a before/after native comparison",
+  "virtual_source": "docs/QUEUE-06B-VALIDATION-2026-10-22.md; tests/live-room-lifecycle.test.mjs",
+  "virtual_pitch": [
+    {"wpm": 140, "words": 8400, "max_working_queue": 23, "drain_finished_ms": 3717900},
+    {"wpm": 180, "words": 10800, "max_working_queue": 72, "drain_finished_ms": 4954300},
+    {"wpm": 220, "words": 13200, "max_working_queue": 72, "drain_finished_ms": 6105200}
+  ],
+  "native_source": "outputs/pitch-soak-1792679131187/latency.json (workspace evidence, not committed)",
+  "native_captured_at": "2026-10-22T14:26:53.761Z",
+  "native_environment": "Two real Unity runtimes; SwiftShader; simulated ASR/API; 18 words; no production benchmark",
+  "native_batches": [
+    {"admitted": 27566.6, "translation_ready": 27868.8, "dispatched": 27870, "first_frame": 35232.3, "last_frame": 39623.8},
+    {"admitted": 29637.8, "translation_ready": 30061.8, "dispatched": 41016.9, "first_frame": 50755.7, "last_frame": 55061.9},
+    {"admitted": 31635.5, "translation_ready": 32168.9, "dispatched": 55062.6, "first_frame": 71555.2, "last_frame": 78301.2}
+  ]
+}
