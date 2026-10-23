@@ -77,9 +77,23 @@ cookies ou transcrição. Não testa navegador, voz ou execução dos frames.
 - Durante a preparação havia entre 0,86 e 1,5 GiB de RAM livre. Esses números
   não aprovam uma bateria longa com navegador e Unity. Build/health e retorno
   de uma pose não comprovam animação nem fluidez do mini-player.
-- Login foi enviado pela interface no Brave, mas a observação posterior da
-  aba expirou. Navegação, captura, primeiro/último frame e 100 lotes continuam
-  **pendentes**; nenhum ganho de performance ponta a ponta foi atestado.
+- A primeira aba do Brave expirou na leitura após o login; uma nova aba
+  confirmou a sessão administrativa, acesso à sala e à Qualidade. Comparação
+  real na Qualidade exibiu vídeo e a Elia em posições distintas durante o
+  loop. Isso é uma observação visual curta, não medição de primeiro/último
+  frame, teste de áudio ou de mini-player.
+- **Defeito identificado na Qualidade, não corrigido nesta preparação:**
+  `QualityAdmin.tsx` agenda um novo `neotalk:sign` por estimativa
+  `max(2800, palavras * 850)` após `neotalk:playing`, em vez de aguardar o fim
+  real e reaproveitar a pose. `requestSign` do widget não consulta `poseCache`
+  nesse caminho. Os logs locais agregados mostraram oito submissões e 29
+  consultas de status após um smoke e uma única comparação manual, sem 5xx.
+  O mecanismo pode interromper uma frase mais longa que a estimativa e faz
+  requisições redundantes; não atribuir isso à fila da sala sem teste separado.
+  A página de QA foi fechada para interromper esse loop de requisições.
+- Ao final da checagem visual: cerca de 0,87 GiB de RAM e 1,09 GiB de memória
+  virtual livres. Captura, mini-player, primeiro/último frame e 100 lotes
+  continuam **pendentes**; nenhum ganho ponta a ponta foi atestado.
 
 ## Coleta e limites da evidência
 
