@@ -13,7 +13,7 @@ const limitSeconds = Number(process.env.QA_MAX_SECONDS || (target >= 100 ? 2400 
 const mode = process.env.QA_OUTPUT || 'pip';
 if (!Number.isInteger(target) || target < 1 || target > 200 || !Number.isFinite(wpm) || wpm < 60 || wpm > 240 || !['primary', 'pip', 'window'].includes(mode) || limitSeconds < 30 || limitSeconds > 3600) throw new Error('Invalid bounded QA configuration');
 const output = path.join(root, 'outputs', `real-services-${Date.now()}`);
-const phrases = [
+const phrases = process.env.QA_CACHE_REUSE === '1' ? ['Eu quero aprender Libras aqui com você.'] : [
   'Nosso amigo pode aprender com você hoje.', 'Quero compreender melhor esta proposta para trabalhar.',
   'Vamos aprender juntos e conversar sobre acessibilidade.', 'Meu amigo quer comprar isso aqui agora.',
   'Precisamos compreender para ajudar nosso amigo hoje.', 'Eu quero aprender Libras e trabalhar hoje.',
@@ -27,6 +27,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const normalize = text => text.replace(/\s+/g, ' ').trim();
 const report = { schema: 1, startedAt: new Date().toISOString(), configuration: {
   targetTranscripts: target, wpm, output: mode, maxSeconds: limitSeconds,
+  workload: process.env.QA_CACHE_REUSE === '1' ? 'repeated-phrase-cache-check' : 'ten-phrase-pitch-cycle',
   services: 'real local candidates + remote GPT/NeoTalk', recognition: 'scripted final pt-BR transcripts; fake audio permission device',
   pip: 'native API when supported; actual window fallback, never a simulated shell',
   browser: 'isolated Edge headless; no background-throttling bypass flags',
@@ -188,7 +189,11 @@ async function exportTelemetry() {
     report.pressure = telemetry.pressure; report.runtimeResets = telemetry.runtimeResets;
     check(exported.mode === 'translation', 'Translation mode, not presentation');
     check(telemetry.missing.firstFrame === 0 && telemetry.missing.lastFrame === 0, 'All admitted batches have actual first and last frames');
-    check(telemetry.missing.serverTimings === 0 && telemetry.missing.poseTimings === 0, 'Real backend and pose timings are present');
+    check(telemetry.missing.serverTimings === 0 && (telemetry.missing.requiredPoseTimings ?? telemetry.missing.poseTimings) === 0,
+      'Service spans present where required; explicit memory replay is not a missing request');
+    if (process.env.QA_CACHE_REUSE === '1') check(telemetry.pose_sources?.browserMemory > 0, 'Browser-memory replay provenance is observed');
+    check((telemetry.pose_pipeline_ms?.total_ms?.count ?? 0) <= (report.http['pose_submit:202'] ?? 0),
+      'Reused fetch spans never inflate the actual service submission count');
     check(telemetry.runtimeResets === 0 && telemetry.pressure.capturePauses === 0, 'No automatic capture pauses or runtime resets');
     check(telemetry.pressure.rejectedSourceWords === 0 && telemetry.pressure.rejectedAudioChunks === 0, 'No rejected input');
     check(telemetry.outcomes.error === 0 && telemetry.outcomes.pending === 0 && telemetry.outcomes.skipped === 0, 'No hidden skipped, failed or pending batches');

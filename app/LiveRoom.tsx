@@ -572,7 +572,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     setAvatarError("");
     setAvatarStatus(`Enviando glosas para ${avatarNames[avatar]}`);
     const key = poseKey(next.glossText || "");
-    const prepared = prefetchedPosesRef.current.get(key) || recentPosesRef.current.get(key);
+    const prefetched = prefetchedPosesRef.current.get(key);
+    const prepared = prefetched || recentPosesRef.current.get(key);
+    if (diagnostics) telemetryRef.current.poseSource(next.id,
+      prepared && !prefetched && avatarSupportsSharedPoseRef.current ? 'browser-memory' : 'service');
     if (prepared) {
       prefetchedPosesRef.current.delete(key);
       latestPoseRef.current = prepared;
@@ -1066,7 +1069,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         const pending = pendingBatchesRef.current.find((batch) => batch.status === "ready" && poseKey(batch.glossText || "") === key);
         recordPoseDiagnostic("principal", { ...data, elapsedMs: startedAt ? Date.now() - startedAt : undefined }, pending?.id ?? null);
         if (data.avatar === avatar && pending) {
-          if (diagnostics) telemetryRef.current.pose(pending.id, data.timingsMs, data.poseCacheHit);
+          if (diagnostics) telemetryRef.current.pose(pending.id, data.timingsMs, data.poseCacheHit, data.traceId);
           prefetchedPosesRef.current.set(key, {
             phrase: data.phrase, pose: data.pose,
             words: Array.isArray(data.words) ? data.words.map(String) : [],
@@ -1099,7 +1102,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (data.type === "neotalk:pose-ready" && data.phrase && data.pose?.content_url) {
         if (!isCurrentAvatarPhrase(data.phrase)) return;
         if (diagnostics && activeBatchRef.current && !idleLoopActiveRef.current)
-          telemetryRef.current.pose(activeBatchRef.current.id, data.timingsMs, data.poseCacheHit);
+          telemetryRef.current.pose(activeBatchRef.current.id, data.timingsMs, data.poseCacheHit, data.traceId);
         const shared: SharedPose = { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [], loadId: data.loadId, traceId: data.traceId, taskId: data.taskId };
         latestPoseRef.current = shared;
         if (shared.loadId) expectedPoseCorrelationRef.current = shared.loadId;

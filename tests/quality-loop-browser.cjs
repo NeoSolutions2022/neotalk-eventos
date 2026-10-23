@@ -64,7 +64,7 @@ let browser, page;
     result.nativeSamples = observed.frames;
     result.wraps = observed.frames.reduce((total, frame, index, frames) => total + (index > 0 && frame.frame < frames[index - 1].frame && frames[index - 1].frame >= .9 * (frames[index - 1].frameCount - 1) ? 1 : 0), 0);
     if (result.poseSubmissions !== 1 || result.poseLoads !== 1 || result.readyCount !== 1 || result.pageErrors) throw new Error('Native loop repeated API/load work or reset the runtime');
-    await page.locator('.quality-grid').screenshot({ path: path.join(output, 'comparison.png') }).catch(() => {});
+    await page.locator('.compare-grid').screenshot({ path: path.join(output, 'comparison.png') }).catch(() => {});
     result.result = 'PASS';
   } catch (error) { result.result = 'FAIL'; result.failure = error.message.replace(/https?:\/\/\S+/g, '[url]'); process.exitCode = 1; }
   finally {

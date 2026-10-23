@@ -64,6 +64,24 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
     return distribution(executions.slice(1).flatMap((execution, index) => execution.first >= executions[index].last
       ? [execution.first - executions[index].last] : []));
   };
+  const nativeObserved = output => {
+    const executions = new Map();
+    for (const event of Array.isArray(ledger?.observations) ? ledger.observations : []) {
+      if (!event || event.output !== output || typeof event.loadId !== 'string' || !finite(event.at)) continue;
+      const item = executions.get(event.loadId) || {};
+      if (event.type === 'neotalk:playing') item.ack ??= event.at;
+      if (event.type === 'neotalk:playback-frame' && Number.isInteger(event.frameCount) && event.frameCount > 0 &&
+        Number.isInteger(event.frame) && event.frame >= 0 && event.frame < event.frameCount) {
+        if (event.status === 'preparing') item.preparing ??= event.at;
+        if (['started','progress'].includes(event.status)) item.first ??= event.at;
+        if (event.status === 'finished' && event.frame === event.frameCount - 1) item.last ??= event.at;
+      }
+      executions.set(event.loadId, item);
+    }
+    const spans = point => distribution([...executions.values()].flatMap(item => finite(item[point]) && finite(item.first) &&
+      finite(item.last) && item.first >= item[point] && item.last >= item.first ? [item.first - item[point]] : []));
+    return { ackToFirstFrameMs: spans('ack'), preparingToFirstFrameMs: spans('preparing') };
+  };
   // Execution and diagnostic coverage are different gates. A cached pose may
   // have no new service call. The current export does not label that provenance,
   // so show the missing coverage instead of claiming zero-time network work.
@@ -75,10 +93,14 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
       browserMemory: rows.filter(row => row.poseSource === 'browser-memory').length,
       unreported: rows.filter(row => !['service','browser-memory'].includes(row.poseSource)).length },
     runtimeResets: finite(telemetry?.runtimeResets) ? telemetry.runtimeResets : null,
+    queue: { peakPendingBatches: finite(telemetry?.pressure?.maxPendingBatches) ? telemetry.pressure.maxPendingBatches : null,
+      sourceWords: finite(telemetry?.input?.sourceWords) ? telemetry.input.sourceWords : null,
+      observedInputDurationMs: finite(telemetry?.input?.observedDurationMs) ? telemetry.input.observedDurationMs : null },
     metricsMs: Object.fromEntries(Object.entries(intervals).map(([key, interval]) => [key, metric(interval)])),
     translationByContextCacheMs: Object.fromEntries(['hit', 'miss', 'unreported'].map(group => [group,
       metric(intervals.translationRequest, rows.filter(row => group === 'hit' ? row.contextCacheHit === true : group === 'miss' ? row.contextCacheHit === false : row.contextCacheHit === undefined))])),
     handoffMs: { primary: handoff('primary'), external: externalRequired ? handoff('external') : distribution([]) },
+    nativeObservedIntervals: { primary: nativeObserved('primary'), external: nativeObserved('external') },
     // These stages overlap; never add them to infer total worker/Unity cost.
     serviceStagesMs: Object.fromEntries(['context_ms', 'provider_ms', 'validation_ms', 'endpoint_ms'].map(key => [key,
       distribution(rows.map(row => row.server?.[key]))])),
@@ -89,6 +111,7 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
       'Service authenticity depends on the documented harness and runtime; JSON declarations alone do not prove it.',
       'ASR is injected. Admission-to-frame is not acoustic speech-to-frame.',
       'Native events are browser-received callbacks, not GPU presentation timestamps.',
+      'ACK/preparing-to-first-frame uses observed wall-clock callbacks and includes scheduling, not isolated Unity CPU compute.',
       'Browser-memory replay has no new service call; older unlabeled missing pose spans remain unknown, never zero.',
       'Handoff includes queue/idle and scheduling; samples must be segmented before comparison.',
       'Service and pose timings overlap and do not separate internal worker queue/compute.'] };

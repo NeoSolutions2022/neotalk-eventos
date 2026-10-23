@@ -52,7 +52,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
     'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
-  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, telemetryRef, manualMuteRef, transcriptBacklogRef, audioBacklogRef, drainTranscriptBacklog, recoverFallbackCaptureRef, presentationError };\n  return <>`);
+  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, telemetryRef, prefetchedPosesRef, dispatchNextBatch, manualMuteRef, transcriptBacklogRef, audioBacklogRef, drainTranscriptBacklog, recoverFallbackCaptureRef, presentationError };\n  return <>`);
   context.exports = {};
   vm.runInContext(ts.transpileModule(source, { compilerOptions }).outputText, context, { filename: 'LiveRoom.tsx' });
   const component = context.exports.default;
@@ -108,6 +108,24 @@ test('matching prefetch spans are recorded before dispatch and presentation is e
  h.message(packet);assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.mean,200);
  h.qa.telemetryRef.current.begin('demo');h.qa.telemetryRef.current.admit(91,1);h.qa.presentationRef.current.enabled=true;
  h.message(packet);assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.count,0);
+});
+
+test('dispatch labels memory replay separately from a newly prefetched service pose', async()=>{
+ for(const cached of [true,false]){
+  const h=harness(undefined,{diagnostics:true});await h.qa.startLiveRoom();
+  h.qa.avatarSupportsSharedPoseRef.current=true;
+  const shared={phrase:'AMIGO',pose:{content_url:'https://qa-widget.test/pose'},words:['AMIGO']};
+  (cached?h.qa.recentPosesRef:h.qa.prefetchedPosesRef).current.set('AMIGO',shared);
+  h.qa.telemetryRef.current.admit(91,1);
+  if(!cached)h.qa.telemetryRef.current.pose(91,{total_ms:123},false);
+  h.qa.pendingBatchesRef.current=[{id:91,status:'ready',glossText:'AMIGO',text:'amigo de hoje'}];
+  h.qa.dispatchNextBatch();
+  const row=h.qa.telemetryRef.current.snapshot().batches[0];
+  assert.equal(row.poseSource,cached?'browser-memory':'service');
+  assert.equal(row.pose?.total_ms,cached?undefined:123);
+  assert.ok(h.commands.some(command=>command.type==='neotalk:load-pose'));
+  h.qa.stopLiveRoom();await flush();
+ }
 });
 
 test('lookahead warms both upcoming poses once even when the first translation is pending', () => {

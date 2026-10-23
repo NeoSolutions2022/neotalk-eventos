@@ -84,3 +84,24 @@ test('pose spans are allowlisted, absent on old widgets, and repeated delivery d
  assert.equal(s.missing.poseTimings,1);assert.equal(s.batches[0].poseCacheHit,false);
  assert.ok(!JSON.stringify(s).includes('private'));
 });
+
+test('memory replay is explicit without inventing zero-time pose requests',()=>{
+ const {t}=fixture();t.admit(1,1);t.poseSource(1,'browser-memory');const s=t.snapshot();
+ assert.equal(s.pose_sources.browserMemory,1);assert.equal(s.missing.poseTimings,1);assert.equal(s.missing.requiredPoseTimings,0);
+ assert.equal(s.pose_pipeline_ms.total_ms.count,0);assert.equal(s.pose_pipeline_ms.total_ms.mean,null);
+});
+test('actual service spans override memory labels, and unknown labels are not exported',()=>{
+ const {t}=fixture();t.admit(1,1);t.admit(2,2);t.poseSource(1,'browser-memory');t.pose(1,{total_ms:20},true);
+ t.poseSource(1,'browser-memory');t.poseSource(2,'private source');const s=t.snapshot();
+ assert.equal(s.batches[0].poseSource,'service');assert.equal(s.pose_sources.unreported,1);assert.equal(s.missing.requiredPoseTimings,1);
+ assert.ok(!JSON.stringify(s).includes('private source'));
+});
+test('one proxy fetch cannot be counted again when its prefetched result serves another batch',()=>{
+ const {t}=fixture();t.admit(1,1);t.admit(2,2);
+ t.pose(1,{total_ms:50},false,'proxy_fetch_1');t.pose(2,{total_ms:50},false,'proxy_fetch_1');t.poseSource(2,'service');
+ let s=t.snapshot();assert.equal(s.pose_pipeline_ms.total_ms.count,1);assert.equal(s.batches[1].poseSource,'browser-memory');
+ assert.equal(s.missing.requiredPoseTimings,0);
+ t.pose(2,{total_ms:70},true,'proxy_fetch_2');s=t.snapshot();assert.equal(s.pose_pipeline_ms.total_ms.count,2);
+ assert.equal(s.batches[1].poseSource,'service');t.begin('new');t.admit(3,1);t.pose(3,{total_ms:5},false,'proxy_fetch_1');
+ assert.equal(t.snapshot().pose_pipeline_ms.total_ms.count,1);
+});

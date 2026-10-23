@@ -65,3 +65,15 @@ test('explicit browser-memory provenance explains absent request spans without m
   assert.equal(result.consistentSampleGate,true);assert.equal(result.missing.poseTimings,1);
   assert.equal(result.missing.requiredPoseTimings,0);assert.equal(result.poseStagesMs.total_ms.count,0);
 });
+test('native ACK timing is not mistaken for a first frame or paired across outputs', () => {
+  const [latency, ledger]=fixture();ledger.observations=[
+    {type:'neotalk:playing',output:'primary',loadId:'one',at:10},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'one',status:'preparing',frame:0,frameCount:3,at:12},
+    {type:'neotalk:playback-frame',output:'external',loadId:'one',status:'started',frame:0,frameCount:3,at:13},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'one',status:'started',frame:0,frameCount:3,at:20},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'one',status:'finished',frame:2,frameCount:3,at:25},
+  ];const result=analyzeRealServices(latency,ledger,1);
+  assert.equal(result.nativeObservedIntervals.primary.ackToFirstFrameMs.mean,10);
+  assert.equal(result.nativeObservedIntervals.primary.preparingToFirstFrameMs.mean,8);
+  assert.equal(result.nativeObservedIntervals.external.ackToFirstFrameMs.count,0);
+});

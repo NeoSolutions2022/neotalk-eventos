@@ -13,10 +13,12 @@ type PoseStage = typeof POSE_STAGES[number];
 type Execution = { output: 'primary'|'external'; loadId: string; first: number; last?: number };
 type Batch = { id: number; traceId: string; points: Partial<Record<Point,number>>; attempts: number;
   outcome?: 'complete'|'error'|'skipped'|'cancelled'; server: Partial<Record<Stage,number>>; executions: Execution[];
-  contextCacheHit?: boolean; catalogWordCount?: number; pose?: Partial<Record<PoseStage,number>>; poseCacheHit?: boolean };
+    contextCacheHit?: boolean; catalogWordCount?: number; pose?: Partial<Record<PoseStage,number>>; poseCacheHit?: boolean;
+    poseSource?: 'service'|'browser-memory' };
 const SERVER_STAGES: Stage[] = ['context_ms','provider_ms','validation_ms','service_ms','endpoint_ms'];
 export class LiveTelemetry {
   private rows = new Map<number,Batch>();
+  private poseFetchOwners = new Map<string,number>();
   private session = '';
   private evicted = 0;
   private pressureCount = 0;
@@ -38,7 +40,7 @@ export class LiveTelemetry {
   }
   begin(session: string) {
     this.session = /^[a-zA-Z0-9_-]{1,80}$/.test(session) ? session : 'local';
-    this.rows.clear(); this.evicted=0; this.pressureCount=0; this.resumeCount=0; this.maxQueue=0;this.sequence=0;
+    this.rows.clear(); this.poseFetchOwners.clear(); this.evicted=0; this.pressureCount=0; this.resumeCount=0; this.maxQueue=0;this.sequence=0;
     this.previous={};this.gaps=[];this.asr=[];this.firstInput=null;this.lastInput=null;
     this.sourceWords=0;this.resetCount=0;this.inputRejected=0;this.blockedAdmissions=0;this.rejectedAudioChunks=0;
   }
@@ -56,13 +58,25 @@ export class LiveTelemetry {
   context(id:number,hit:unknown,words:unknown){const row=this.rows.get(id);if(!row)return;
     if(typeof hit==='boolean')row.contextCacheHit=hit;
     if(typeof words==='number'&&Number.isSafeInteger(words)&&words>=0)row.catalogWordCount=words;}
-  pose(id:number,timing:unknown,cacheHit:unknown){const row=this.rows.get(id);
+  pose(id:number,timing:unknown,cacheHit:unknown,fetchTrace?:unknown){const row=this.rows.get(id);
     if(!row||row.pose||!timing||typeof timing!=='object'||Array.isArray(timing))return;
     const safe:Partial<Record<PoseStage,number>>={};
     for(const key of POSE_STAGES){const value=(timing as Record<string,unknown>)[key];
       if(typeof value==='number'&&Number.isFinite(value)&&value>=0)safe[key]=value;}
     if(!Object.keys(safe).length)return;
-    row.pose=safe;if(typeof cacheHit==='boolean')row.poseCacheHit=cacheHit;}
+    const trace=typeof fetchTrace==='string'&&/^[A-Za-z0-9_-]{1,96}$/.test(fetchTrace)?fetchTrace:undefined;
+    if(trace){
+      const owner=this.poseFetchOwners.get(trace);
+      if(owner!==undefined&&owner!==id){row.poseSource='browser-memory';return;}
+      while(this.poseFetchOwners.size>=1024)this.poseFetchOwners.delete(this.poseFetchOwners.keys().next().value!);
+      this.poseFetchOwners.set(trace,id);
+    }
+    row.pose=safe;row.poseSource='service';if(typeof cacheHit==='boolean')row.poseCacheHit=cacheHit;}
+  poseSource(id:number,source:unknown){const row=this.rows.get(id);
+    if(row&&(source==='service'||source==='browser-memory')){
+      if(row.pose)row.poseSource='service';
+      else if(source==='browser-memory'||row.poseSource!=='browser-memory')row.poseSource=source;
+    }}
   outcome(id:number,value:Batch['outcome']){const row=this.rows.get(id);if(row)row.outcome=value;}
   pressure(){if(this.session)this.pressureCount++;}
   resumed(){if(this.session)this.resumeCount++;}
@@ -113,12 +127,14 @@ export class LiveTelemetry {
       input:{sourceWords:this.sourceWords,observedDurationMs:this.firstInput===null?null:this.lastInput!-this.firstInput},runtimeResets:this.resetCount,
       outcomes:{complete:rows.filter(r=>r.outcome==='complete').length,error:rows.filter(r=>r.outcome==='error').length,
         skipped:rows.filter(r=>r.outcome==='skipped').length,cancelled:rows.filter(r=>r.outcome==='cancelled').length,pending:rows.filter(r=>!r.outcome).length},
-      missing:{firstFrame:rows.filter(r=>r.points.first_frame===undefined).length,lastFrame:rows.filter(r=>r.points.last_frame===undefined).length,serverTimings:rows.filter(r=>r.server.endpoint_ms===undefined).length,poseTimings:rows.filter(r=>!r.pose).length},
+      pose_sources:{service:rows.filter(r=>r.poseSource==='service').length,browserMemory:rows.filter(r=>r.poseSource==='browser-memory').length,unreported:rows.filter(r=>r.poseSource===undefined).length},
+      missing:{firstFrame:rows.filter(r=>r.points.first_frame===undefined).length,lastFrame:rows.filter(r=>r.points.last_frame===undefined).length,serverTimings:rows.filter(r=>r.server.endpoint_ms===undefined).length,poseTimings:rows.filter(r=>!r.pose).length,
+        requiredPoseTimings:rows.filter(r=>!r.pose&&r.poseSource!=='browser-memory').length},
       limitations:['No acoustic speech-end timestamp: admission-to-frame is NOT speech-to-frame.','Native event reception includes postMessage scheduling, not GPU frame time.',
-        'Pose spans require compatible widget/proxy; absent values are not zero. Upstream request duration does NOT separate worker queue/compute.','Browser Web Speech ASR cannot expose server processing time.','Handoff includes empty-queue/idle time; translation readiness is NOT proof of native pose preparation.',
+        'Pose spans require compatible widget/proxy; absent values are not zero. Browser-memory replay has no new service request. Upstream request duration does NOT separate worker queue/compute.','Browser Web Speech ASR cannot expose server processing time.','Handoff includes empty-queue/idle time; translation readiness is NOT proof of native pose preparation.',
         'Bounded sample window; evictions and missing timings must be reported.'],
       batches:rows.map(r=>({traceId:r.traceId,attempts:r.attempts,outcome:r.outcome||'pending',points:r.points,server:r.server,
-        contextCacheHit:r.contextCacheHit,catalogWordCount:r.catalogWordCount,pose:r.pose,poseCacheHit:r.poseCacheHit,
+        contextCacheHit:r.contextCacheHit,catalogWordCount:r.catalogWordCount,pose:r.pose,poseCacheHit:r.poseCacheHit,poseSource:r.poseSource,
         executions:r.executions.map(e=>({output:e.output,first:e.first,last:e.last}))}))};
   }
 }
