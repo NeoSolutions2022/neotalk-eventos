@@ -8,7 +8,7 @@ import ts from 'typescript';
 import { playbackComplete } from '../app/playbackCompletion.mjs';
 const compilerOptions = { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX };
 const sources = {};
-for (const name of ['LiveRoom', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
+for (const name of ['LiveRoom', 'captureBacklog', 'liveTelemetry', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
   sources[name] = await readFile(new URL(`../app/${name}.${name === 'LiveRoom' ? 'tsx' : 'ts'}`, import.meta.url), 'utf8');
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
@@ -32,14 +32,14 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
   const cleanups = [];
   const context = vm.createContext({ exports: {}, window, navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } },
     document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' }, process: { env: {} }, URL, AbortController, AbortSignal, DOMException, Blob,
-    console, Error, TypeError, SyntaxError, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, btoa: value => Buffer.from(value).toString('base64') });
+    performance: { now: () => Date.now() }, console, Error, TypeError, SyntaxError, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, btoa: value => Buffer.from(value).toString('base64') });
   const modules = {
     './playbackCompletion.mjs': { playbackComplete },
     react, 'react/jsx-runtime': { jsx: () => null, jsxs: () => null, Fragment: Symbol('fragment') },
     './apiClient': { ApiError, apiRequest: async (path, options = {}) => { calls.push({ path, options }); return handler(path, options); } },
   };
   context.require = name => modules[name];
-  for (const name of ['liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
+  for (const name of ['captureBacklog', 'liveTelemetry', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
     context.exports = {};
     // Each CommonJS module owns its exports binding; global reuse breaks
     // functions that refer to other exports of their own module.
@@ -52,7 +52,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
     'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
-  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, presentationError };\n  return <>`);
+  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, telemetryRef, prefetchedPosesRef, dispatchNextBatch, manualMuteRef, transcriptBacklogRef, audioBacklogRef, drainTranscriptBacklog, recoverFallbackCaptureRef, presentationError };\n  return <>`);
   context.exports = {};
   vm.runInContext(ts.transpileModule(source, { compilerOptions }).outputText, context, { filename: 'LiveRoom.tsx' });
   const component = context.exports.default;
@@ -69,6 +69,65 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
       qa.externalAvatarReadyRef.current = true; qa.externalSupportsSharedPoseRef.current = true; qa.avatarSupportsSharedPoseRef.current = true; return externalFrame; },
     get recording() { return recording; } };
 }
+test('admin diagnostics correlate the actual translation request without retaining its text', async () => {
+  const h = harness(async path => path === '/agent/translate'
+    ? {gloss_text:'TESTE',timings_ms:{provider_ms:30,endpoint_ms:40}} : {id:'qa'}, {diagnostics:true});
+  await h.qa.startLiveRoom();h.qa.enqueueBatch('texto privado');await flush();
+  const body=JSON.parse(h.calls.find(c=>c.path==='/agent/translate').options.body);
+  assert.match(body.trace_id,/^live_[a-z0-9]+_1$/);
+  const report=h.qa.telemetryRef.current.snapshot();
+  assert.equal(report.metrics.translation_request_ms.count,1);
+  assert.equal(report.server.provider_ms.mean,30);
+  assert.equal(report.missing.firstFrame,1,'dispatch alone is not native animation evidence');
+  assert.ok(!JSON.stringify(report).includes('texto privado'));
+  h.qa.stopLiveRoom();assert.equal(h.qa.telemetryRef.current.snapshot().outcomes.cancelled,1);
+});
+
+test('regular users do not send trace IDs or collect telemetry', async () => {
+  const h=harness(async path=>path==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'});
+  await h.qa.startLiveRoom();h.qa.enqueueBatch('teste');await flush();
+  assert.equal(JSON.parse(h.calls.find(c=>c.path==='/agent/translate').options.body).trace_id,undefined);
+  assert.equal(h.qa.telemetryRef.current.snapshot().batches.length,0);h.qa.stopLiveRoom();
+});
+
+test('only a current primary pose message attaches fetch spans to its translation batch',async()=>{
+ const h=harness(async p=>p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'},{diagnostics:true});
+ await h.qa.startLiveRoom();h.qa.enqueueBatch('teste');await flush();
+ const packet={type:'neotalk:pose-ready',avatar:'elia',phrase:'TESTE',pose:{content_url:'/pose'},loadId:'pose1',timingsMs:{total_ms:120,poll_wait_ms:20},poseCacheHit:true};
+ const external=h.external();h.message(packet,external);h.message({...packet,phrase:'ANTIGA'});
+ assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.count,0);
+ h.message(packet);h.message(packet);
+ const s=h.qa.telemetryRef.current.snapshot();assert.equal(s.pose_pipeline_ms.total_ms.count,1);assert.equal(s.pose_pipeline_ms.total_ms.mean,120);
+ assert.equal(s.batches[0].poseCacheHit,true);h.qa.stopLiveRoom();
+});
+
+test('matching prefetch spans are recorded before dispatch and presentation is excluded',()=>{
+ const h=harness(undefined,{diagnostics:true});h.qa.telemetryRef.current.begin('qa');h.qa.telemetryRef.current.admit(91,1);
+ h.qa.pendingBatchesRef.current=[{id:91,status:'ready',glossText:'AMIGO',text:'amigo'}];
+ const packet={type:'neotalk:prefetch-ready',avatar:'elia',phrase:'AMIGO',pose:{content_url:'/pose'},timingsMs:{total_ms:200}};
+ h.message(packet);assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.mean,200);
+ h.qa.telemetryRef.current.begin('demo');h.qa.telemetryRef.current.admit(91,1);h.qa.presentationRef.current.enabled=true;
+ h.message(packet);assert.equal(h.qa.telemetryRef.current.snapshot().pose_pipeline_ms.total_ms.count,0);
+});
+
+test('dispatch labels memory replay separately from a newly prefetched service pose', async()=>{
+ for(const cached of [true,false]){
+  const h=harness(undefined,{diagnostics:true});await h.qa.startLiveRoom();
+  h.qa.avatarSupportsSharedPoseRef.current=true;
+  const shared={phrase:'AMIGO',pose:{content_url:'https://qa-widget.test/pose'},words:['AMIGO']};
+  (cached?h.qa.recentPosesRef:h.qa.prefetchedPosesRef).current.set('AMIGO',shared);
+  h.qa.telemetryRef.current.admit(91,1);
+  if(!cached)h.qa.telemetryRef.current.pose(91,{total_ms:123},false);
+  h.qa.pendingBatchesRef.current=[{id:91,status:'ready',glossText:'AMIGO',text:'amigo de hoje'}];
+  h.qa.dispatchNextBatch();
+  const row=h.qa.telemetryRef.current.snapshot().batches[0];
+  assert.equal(row.poseSource,cached?'browser-memory':'service');
+  assert.equal(row.pose?.total_ms,cached?undefined:123);
+  assert.ok(h.commands.some(command=>command.type==='neotalk:load-pose'));
+  h.qa.stopLiveRoom();await flush();
+ }
+});
+
 test('lookahead warms both upcoming poses once even when the first translation is pending', () => {
   const h = harness();
   h.qa.avatarBusyRef.current = true;
@@ -79,6 +138,102 @@ test('lookahead warms both upcoming poses once even when the first translation i
   assert.equal(h.commands.filter(c => c.type === 'neotalk:prefetch').length, 1);
   h.qa.pendingBatchesRef.current.shift(); h.qa.prefetchNextBatch();
   assert.equal(h.commands.filter(c => c.type === 'neotalk:prefetch').length, 2);
+});
+
+test('one 1,000-word final transcript is neither truncated nor allowed to mute capture', async () => {
+ const held=deferred();const h=harness(async p=>p==='/agent/translate'?held.promise:{id:'qa'},{diagnostics:true});
+ await h.qa.startLiveRoom();const words=Array.from({length:1000},(_,i)=>'palavra'+i);h.qa.addTranscriptToBuffer(words.join(' '));h.qa.flushWordBuffer(true);
+ const retained=h.qa.pendingBatchesRef.current.flatMap(b=>b.text.split(' '));
+ while(h.qa.transcriptBacklogRef.current.length)retained.push(...h.qa.transcriptBacklogRef.current.shift().text.split(' '));
+ assert.deepEqual(Array.from(retained),words);assert.equal(h.qa.microphoneMutedRef.current,false);assert.equal(h.qa.wordBufferRef.current.length,0);
+ assert.equal(h.qa.telemetryRef.current.snapshot().pressure.rejectedSourceWords,0);
+ h.qa.stopLiveRoom();held.resolve({gloss_text:'TESTE'});await flush();
+});
+
+test('an exhausted staging budget is explicit but never mutes or evicts accepted work', async () => {
+ const held=deferred();const h=harness(async p=>p==='/agent/translate'?held.promise:{id:'qa'},{diagnostics:true});await h.qa.startLiveRoom();
+ for(let i=0;i<72;i++)h.qa.enqueueBatch(`frase ${i} um dois tres quatro cinco seis sete oito nove dez`);
+ const before=h.qa.pendingBatchesRef.current.map(b=>b.id);
+ h.qa.transcriptBacklogRef.current=new h.qa.transcriptBacklogRef.current.constructor(1);
+ h.qa.addTranscriptToBuffer('um dois tres quatro cinco seis sete oito nove dez onze doze fim');
+ assert.deepEqual(h.qa.pendingBatchesRef.current.map(b=>b.id),before);assert.equal(h.qa.microphoneMutedRef.current,false);
+ assert.equal(h.qa.telemetryRef.current.snapshot().pressure.rejectedSourceWords,13);
+ assert.ok(h.toasts.some(t=>t.includes('buffer de texto encheu')));
+ h.qa.stopLiveRoom();held.resolve({gloss_text:'TESTE'});await flush();
+});
+
+test('ending a room releases staged text and audio so neither can leak into the next room', async () => {
+ const held=deferred();const h=harness(async p=>p==='/agent/translate'?held.promise:{id:'qa'});await h.qa.startLiveRoom();
+ for(let i=0;i<100;i++)h.qa.enqueueBatch(`antiga ${i} um dois tres quatro cinco seis sete oito nove dez`);
+ h.qa.fallbackTranscriptionInFlightRef.current=2;
+ for(let i=0;i<20;i++)h.qa.queueFallbackTranscription(new Blob(['old audio']),0);
+ assert.ok(h.qa.transcriptBacklogRef.current.length>0);assert.ok(h.qa.audioBacklogRef.current.length>0);
+ h.qa.stopLiveRoom();assert.equal(h.qa.transcriptBacklogRef.current.length,0);assert.equal(h.qa.audioBacklogRef.current.length,0);
+ await h.qa.startLiveRoom();held.resolve({gloss_text:'ANTIGA'});await flush();
+ assert.equal(h.commands.some(c=>c.phrase==='ANTIGA'),false);assert.equal(h.qa.pendingBatchesRef.current.length,0);h.qa.stopLiveRoom();
+});
+
+test('manual mute does not cancel already accepted compatible transcriptions', async () => {
+ const held=deferred();const h=harness(async p=>p==='/agent/transcribe'?held.promise:p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'});
+ delete h.context.window.SpeechRecognition;h.track.readyState='live';
+ h.context.MediaRecorder=class{static isTypeSupported(){return true;}constructor(){this.state='inactive';}start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}};
+ await h.qa.startLiveRoom();h.qa.queueFallbackTranscription(new Blob(['accepted speech']),0);h.render();h.context.qa.toggleMicrophone();
+ const request=h.calls.find(c=>c.path==='/agent/transcribe');assert.equal(request.options.signal.aborted,false);
+ held.resolve({text:'texto ja capturado'});await flush();h.qa.flushWordBuffer(true);await flush();
+ assert.equal(h.qa.microphoneMutedRef.current,true);assert.equal(h.qa.activeBatchRef.current.text,'texto ja capturado');h.qa.stopLiveRoom();
+});
+
+test('a failed accepted ASR slot warns the operator once and releases later speech without muting', async () => {
+ let slot=0;
+ const h=harness(async p=>{
+  if(p==='/agent/transcribe'){
+   if(++slot<=2)throw new Error('terminal transcription failure');
+   return {text:'fala posterior preservada'};
+  }
+  return p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'};
+ });
+ await h.qa.startLiveRoom();
+ for(let i=0;i<3;i++)h.qa.queueFallbackTranscription(new Blob(['accepted']),0);
+ await flush();h.qa.flushWordBuffer(true);await flush();
+ assert.equal(h.toasts.filter(t=>t.includes('não pôde ser transcrito')).length,1);
+ assert.equal(h.qa.activeBatchRef.current.text,'fala posterior preservada');
+ assert.equal(h.qa.microphoneMutedRef.current,false);h.qa.stopLiveRoom();
+});
+
+test('late ASR failure from a closed room neither warns nor enters the next room', async () => {
+ const held=deferred();const h=harness(async p=>p==='/agent/transcribe'?held.promise:{id:'qa'});
+ await h.qa.startLiveRoom();h.qa.queueFallbackTranscription(new Blob(['old']),0);
+ h.qa.stopLiveRoom();await h.qa.startLiveRoom();
+ held.resolve(Promise.reject(new Error('old failure')));await flush();
+ assert.equal(h.toasts.filter(t=>t.includes('não pôde ser transcrito')).length,0);
+ assert.equal(h.qa.wordBufferRef.current.length,0);h.qa.stopLiveRoom();
+});
+
+test('slow first ASR slot bounds completed out-of-order responses while capture keeps staging', async () => {
+ const first=deferred();let requests=0;
+ const h=harness(async p=>p==='/agent/transcribe'?(++requests===1?first.promise:{text:'fala posterior'}):p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'});
+ await h.qa.startLiveRoom();
+ for(let i=0;i<100;i++)h.qa.queueFallbackTranscription(new Blob(['accepted']),0);
+ for(let i=0;i<20;i++)await flush();
+ assert.ok(requests<=8,`unbounded reorder window dispatched ${requests} chunks`);
+ assert.equal(h.qa.microphoneMutedRef.current,false);
+ assert.ok(h.qa.audioBacklogRef.current.length>0);
+ first.resolve({text:'primeira fala'});for(let i=0;i<60;i++)await flush();
+ h.qa.flushWordBuffer(true);await flush();
+ assert.equal(requests,100,'all admitted chunks resume after the missing first slot');
+ assert.ok(h.qa.activeBatchRef.current.text.startsWith('primeira fala'));
+ h.qa.stopLiveRoom();
+});
+
+test('reconnecting a capture device preserves the controller and accepted ASR backlog', async () => {
+ const held=deferred();const h=harness(async p=>p==='/agent/transcribe'?held.promise:p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'});
+ delete h.context.window.SpeechRecognition;h.track.readyState='live';h.navigator.onLine=true;
+ h.context.MediaRecorder=class{static isTypeSupported(){return true;}constructor(){this.state='inactive';}start(){this.state='recording';}stop(){this.state='inactive';this.onstop?.();}};
+ await h.qa.startLiveRoom();h.qa.queueFallbackTranscription(new Blob(['accepted']),0);
+ const request=h.calls.find(c=>c.path==='/agent/transcribe');h.qa.recoverFallbackCaptureRef.current();await flush();
+ assert.equal(request.options.signal.aborted,false);assert.equal(h.qa.listeningRef.current,true);
+ held.resolve({text:'trecho anterior ao dispositivo'});await flush();h.qa.flushWordBuffer(true);await flush();
+ assert.equal(h.qa.activeBatchRef.current.text,'trecho anterior ao dispositivo');h.qa.stopLiveRoom();
 });
 test('external room control starts capture and finishes the current room', async () => {
   const h = harness(); h.qa.externalRoomActionRef.current(); await flush();
@@ -382,12 +537,14 @@ test('virtual long-run orchestration: 1,200 sequential phrases, bounded session 
   assert.equal(h.commands.filter(c => c.type === 'neotalk:sign').length, 1200);
   assert.equal(h.qa.recentPhrasesRef.current.length, 2); h.qa.stopLiveRoom();
 });
-test('audio overload preserves queued chunk order and gives a rate-limited presenter notice', () => {
-  const h = harness(); h.qa.fallbackTranscriptionInFlightRef.current = 2;
+test('audio arrivals beyond the ASR window are staged in order without muting capture', async () => {
+  const h = harness();await h.qa.startLiveRoom(); h.qa.fallbackTranscriptionInFlightRef.current = 2;
   for (let i = 0; i < 20; i++) h.qa.queueFallbackTranscription(new Blob([`${i}`]), 0);
   assert.equal(h.qa.fallbackTranscriptionQueueRef.current.length, 6);
   assert.deepEqual(Array.from(h.qa.fallbackTranscriptionQueueRef.current, chunk => chunk.sequence), [0, 1, 2, 3, 4, 5]);
-  assert.equal(h.toasts.filter(text => text.includes('Um trecho')).length, 1);
+  assert.equal(h.qa.audioBacklogRef.current.length,14);
+  assert.equal(h.qa.microphoneMutedRef.current,false);
+  assert.equal(h.toasts.some(text=>text.includes('buffer')),false);h.qa.stopLiveRoom();
 });
 
 test('stress: 2,000 arrivals while translation stalls must not grow the queue without bound', async () => {
@@ -399,7 +556,11 @@ test('stress: 2,000 arrivals while translation stalls must not grow the queue wi
   assert.ok(h.qa.pendingBatchesRef.current.reduce((sum,batch) => sum + batch.text.split(' ').length,0) <= 864);
   assert.ok(h.qa.wordBufferRef.current.length <= 120);
   assert.ok(h.qa.agentPromisesRef.current.size <= 2);
-  assert.equal(h.qa.microphoneMutedRef.current, true);
+  assert.equal(h.qa.microphoneMutedRef.current, false);
+  assert.ok(h.qa.transcriptBacklogRef.current.length>0);
+  let captured=h.qa.wordBufferRef.current.length+h.qa.pendingBatchesRef.current.reduce((n,b)=>n+b.text.split(' ').length,0);
+  while(h.qa.transcriptBacklogRef.current.length)captured+=h.qa.transcriptBacklogRef.current.shift().text.split(' ').length;
+  assert.equal(captured,24000,'all words survive the former admission limit');
   assert.equal(h.recording, true);
   h.qa.stopLiveRoom(); held.resolve({ gloss_text: 'TESTE' }); await flush();
   assert.equal(h.commands.some(command => command.type === 'neotalk:sign'), false);
@@ -417,13 +578,14 @@ test('stress: slow avatar drains every admitted burst in order without resetting
     const text = `frase ${i} com doze palavras de teste para esta fila agora mesmo`;
     admitted.push(...text.split(' ')); h.qa.addTranscriptToBuffer(text); await flush();
   }
-  assert.equal(h.qa.microphoneMutedRef.current, true);
+  assert.equal(h.qa.microphoneMutedRef.current, false);
+  h.qa.flushWordBuffer(true);
   const seen = [];
-  for (let tick = 0; tick < 100; tick++) {
+  for (let tick = 0; tick < 2300; tick++) {
     const active = h.qa.activeBatchRef.current;
     if (active) { seen.push(...active.text.split(' ')); h.qa.completeActiveBatch(); }
     await flush();
-    if (!h.qa.activeBatchRef.current && !h.qa.pendingBatchesRef.current.length && !h.qa.wordBufferRef.current.length) break;
+    if (!h.qa.activeBatchRef.current && !h.qa.pendingBatchesRef.current.length && !h.qa.wordBufferRef.current.length && !h.qa.transcriptBacklogRef.current.length) break;
   }
   assert.deepEqual(seen, admitted);
   assert.equal(h.qa.pendingBatchesRef.current.length, 0);
@@ -450,7 +612,7 @@ test('stress: 500 untranslated batches leave no failed queue or session metadata
 });
 
 for (const wordsPerMinute of [140, 180, 220]) {
-  test(`pitch: five virtual minutes at ${wordsPerMinute} words/min, slow output, no mute or overload notice`, async () => {
+  test(`pitch: sixty virtual minutes at ${wordsPerMinute} words/min, slow output, no mute or overload notice`, async () => {
     let now = 0, request = 0, id = 0;
     const replies = [], input = [], played = [];
     const h = harness(async (path, options) => {
@@ -463,8 +625,8 @@ for (const wordsPerMinute of [140, 180, 220]) {
     await h.qa.startLiveRoom();
     let nextSpeech = 0, flushAt = Infinity, activeId = null, finishAt = Infinity, maxQueue = 0;
     const speechInterval = 360000 / wordsPerMinute; // six-word transcript fragments
-    for (now = 0; now < 900000; now += 100) {
-      if (now < 300000 && now >= nextSpeech) {
+    for (now = 0; now < 10800000; now += 100) {
+      if (now < 3600000 && now >= nextSpeech) {
         const words = Array.from({ length: 6 }, (_, i) => `palavra${input.length + i}`);
         input.push(...words); h.qa.addTranscriptToBuffer(words.join(' '));
         flushAt = now + 400; nextSpeech += speechInterval;
@@ -488,13 +650,13 @@ for (const wordsPerMinute of [140, 180, 220]) {
       maxQueue = Math.max(maxQueue, h.qa.pendingBatchesRef.current.length);
       assert.equal(h.qa.microphoneMutedRef.current, false, `unexpected pause at ${now} ms, queue=${maxQueue}`);
       assert.ok(h.qa.agentPromisesRef.current.size <= 2);
-      if (now >= 300000 && !h.qa.activeBatchRef.current && !h.qa.pendingBatchesRef.current.length && !h.qa.wordBufferRef.current.length && !replies.length) break;
+      if (now >= 3600000 && !h.qa.activeBatchRef.current && !h.qa.pendingBatchesRef.current.length && !h.qa.wordBufferRef.current.length && !h.qa.transcriptBacklogRef.current.length && !replies.length) break;
     }
     assert.deepEqual(played, input, 'all pitch words must be retained and drained in order');
     const persisted = h.calls.filter(call => call.path.endsWith('/batches') && call.options.method === 'POST')
       .flatMap(call => JSON.parse(call.options.body).text.split(' '));
     assert.deepEqual(persisted, input, 'history must persist the sealed compound text, not an earlier fragment');
-    assert.ok(maxQueue < 72);
+    assert.ok(maxQueue <= 72);
     assert.equal(h.toasts.some(text => /acumul|excedid|não pôde ser processado/.test(text)), false);
     assert.equal(h.commands.some(command => command.type === 'neotalk:set-avatar'), false);
     console.log(`PITCH ${wordsPerMinute} wpm: ${input.length} words; maxQueue=${maxQueue}; drainFinishedAt=${now}ms; translationRequests=${request}`);

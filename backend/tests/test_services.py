@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -155,6 +156,11 @@ class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
             result = await services.translate_to_glosses(FakePool(), "Minha casa")
 
         self.assertEqual(result["gloss_text"], "CASA")
+        self.assertEqual(result["catalog_word_count"], 1)
+        self.assertEqual(set(result["timings_ms"]), {"context_ms", "provider_ms", "validation_ms", "service_ms"})
+        self.assertTrue(all(value >= 0 for value in result["timings_ms"].values()))
+        self.assertEqual(round(result["timings_ms"]["provider_ms"]), result["agent_latency_ms"])
+        self.assertGreaterEqual(result["timings_ms"]["service_ms"], result["timings_ms"]["provider_ms"])
         self.assertEqual(result["openai_response_id"], "resp-ok")
         self.assertEqual([request["max_output_tokens"] for request in client.requests], [2500, 5000])
         self.assertTrue(client.requests[0]["prompt_cache_key"].startswith("neotalk-gloss-"))
@@ -182,6 +188,62 @@ class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pool.fetchrow_calls, 1)
         self.assertEqual(pool.fetch_calls, 1)
         self.assertEqual(client.requests[0]["prompt_cache_key"], client.requests[1]["prompt_cache_key"])
+
+
+class AgentContextConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        services.invalidate_agent_context_cache()
+        services._agent_context_lock = asyncio.Lock()
+
+    async def test_concurrent_cold_requests_load_catalog_once(self):
+        class SlowPool(FakePool):
+            async def fetch(self, query):
+                await asyncio.sleep(.01)
+                return await super().fetch(query)
+        pool = SlowPool()
+        results = await asyncio.gather(*(services._get_agent_context(pool) for _ in range(30)))
+        self.assertEqual(pool.fetch_calls, 1)
+        self.assertEqual(sum(not hit for _, hit in results), 1)
+        self.assertTrue(all(context is results[0][0] for context, _ in results))
+
+    async def test_invalidation_during_read_does_not_republish_old_catalog(self):
+        class ChangingPool(FakePool):
+            async def fetch(self, query):
+                self.fetch_calls += 1
+                if self.fetch_calls == 1:
+                    services.invalidate_agent_context_cache()
+                    return [{"word": "ANTIGA"}]
+                return [{"word": "ACOMPANHAR"}]
+        pool = ChangingPool()
+        result, _ = await services._get_agent_context(pool)
+        self.assertEqual(result.catalog, ("ACOMPANHAR",))
+        self.assertNotIn("ANTIGA", result.instructions)
+        self.assertEqual(pool.fetch_calls, 2)
+        self.assertIs(services._agent_context_cache, result)
+
+    async def test_continuous_invalidations_are_bounded_and_not_cached(self):
+        class UnstablePool(FakePool):
+            async def fetch(self, query):
+                services.invalidate_agent_context_cache()
+                return await super().fetch(query)
+        pool = UnstablePool()
+        with self.assertRaises(HTTPException) as error:
+            await services._get_agent_context(pool)
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertEqual(pool.fetch_calls, 3)
+        self.assertIsNone(services._agent_context_cache)
+
+    async def test_prompt_activation_changes_fingerprint_and_does_not_keep_old_instructions(self):
+        pool = FakePool()
+        before, _ = await services._get_agent_context(pool)
+        async def changed(_):
+            return {"id": "prompt-id", "version": 2, "instructions": "Nova versão aprovada."}
+        pool.fetchrow = changed
+        services.invalidate_agent_context_cache()
+        after, hit = await services._get_agent_context(pool)
+        self.assertFalse(hit)
+        self.assertNotEqual(before.prompt_cache_key, after.prompt_cache_key)
+        self.assertIn("Nova versão aprovada.", after.instructions)
 
 
 if __name__ == "__main__":

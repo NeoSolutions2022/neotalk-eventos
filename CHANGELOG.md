@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-23 — Homologação local isolada
+
+- Compose separado com plataforma e widget candidatos, banco/cache próprios e
+  portas publicadas apenas em loopback; sem alteração do deploy de produção.
+- Credenciais obrigatórias no backend e arquivo privado ignorado pelo Git.
+- Checagem reproduzível de uma frase com GPT e pose reais, relatório sanitizado
+  e guia que separa integração, reprodução visual e aprovação de performance.
+- Dois testes de isolamento/configuração adicionados; 118 testes Node passaram.
+- Preparação local não conclui o gate de 100 lotes nem aprova produção.
+
 ## 2026-10-08 — Textos da apresentação
 
 - Controles simplificados: título **Apresentação**, seletor acessível de

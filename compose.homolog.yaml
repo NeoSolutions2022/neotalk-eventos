@@ -1,0 +1,102 @@
+# Local-only homologation of the two candidate checkouts. Never use production DB.
+name: neotalk-homolog-observability
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: neotalk_homolog
+      POSTGRES_USER: homolog
+      # Local disposable database, not a production credential.
+      POSTGRES_PASSWORD: homolog-local-only
+    volumes:
+      - homolog_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homolog -d neotalk_homolog"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 256m
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://homolog:homolog-local-only@postgres:5432/neotalk_homolog
+      CORS_ORIGINS: http://localhost:3310
+      APP_PUBLIC_ORIGIN: http://localhost:3310
+      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_NAME: neotalk_homolog_session
+      PUBLIC_ACCESS_MODE: password
+      ADMIN_BOOTSTRAP_EMAIL: qa@homolog.invalid
+      ADMIN_BOOTSTRAP_PASSWORD: ${HOMOLOG_ADMIN_PASSWORD:?Set HOMOLOG_ADMIN_PASSWORD in .env.homolog.local}
+      ADMIN_BOOTSTRAP_NAME: QA local
+      NEOTALK_API_KEY: ${NEOTALK_API_KEY:?Set NEOTALK_API_KEY in .env.homolog.local}
+      NEOTALK_API_BASE_URL: https://infra-neotalk-api.k3p3ex.easypanel.host
+      NEOTALK_API_TIMEOUT_SECONDS: "30"
+      NEOTALK_MVP_POSE_FPS: "24"
+      NEOTALK_VIDEO_SUBMIT_PATH: /sign-process-video
+      NEOTALK_VIDEO_STATUS_PATH: /task-status-video/{task_id}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env.homolog.local}
+      OPENAI_BASE_URL: https://api.openai.com/v1
+      OPENAI_MODEL: gpt-5-mini
+      OPENAI_TRANSCRIBE_MODEL: gpt-4o-mini-transcribe
+      OPENAI_REASONING_EFFORT: minimal
+      OPENAI_MAX_OUTPUT_TOKENS: "2500"
+      OPENAI_RETRY_MAX_OUTPUT_TOKENS: "5000"
+      AGENT_CONTEXT_CACHE_TTL_SECONDS: "300"
+    ports: ["127.0.0.1:38100:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 12
+    mem_limit: 512m
+
+  avatar:
+    build: ../release-avatar
+    environment:
+      AVATAR3D_HOST: 0.0.0.0
+      AVATAR3D_PORT: "8080"
+      AVATAR3D_DATA_DIR: /data
+      AVATAR3D_FRONTEND_DIR: /app/frontend
+      AVATAR3D_WEBGL_DIR: /app/webgl
+      AVATAR3D_CORS_ORIGINS: http://localhost:3310,http://localhost:38080
+      AVATAR3D_WIDGET_ORIGINS: http://localhost:3310,http://localhost:38080
+      NEOTALK_API_KEY: ${NEOTALK_API_KEY:?Set NEOTALK_API_KEY in .env.homolog.local}
+      NEOTALK_API_BASE_URL: https://infra-neotalk-api.k3p3ex.easypanel.host
+      NEOTALK_API_TIMEOUT_SECONDS: "30"
+      NEOTALK_MVP_POSE_FPS: "24"
+    ports: ["127.0.0.1:38080:8080"]
+    volumes:
+      - homolog_avatar:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 12
+    mem_limit: 512m
+
+  platform:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: /api/v1
+        NEXT_PUBLIC_AVATAR_WIDGET_URL: http://localhost:38080/widget
+    environment:
+      INTERNAL_API_URL: http://api:8000/api/v1
+    ports: ["127.0.0.1:3310:3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+      avatar:
+        condition: service_healthy
+    mem_limit: 768m
+
+volumes:
+  homolog_postgres:
+  homolog_avatar:

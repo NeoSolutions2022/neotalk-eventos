@@ -1,0 +1,116 @@
+{
+  "captured_at": "2026-10-22T21:40:35.223749+00:00",
+  "scope": "controlled HTTP/1.1 loopback; not production",
+  "python": "3.10.0",
+  "rounds": 6,
+  "calls_per_variant_per_round": 12,
+  "variant_order": "alternating; includes client creation and shutdown; cold context each variant",
+  "synthetic_connection_ms": 20,
+  "synthetic_response_ms": 5,
+  "limitations": [
+    "No TLS, GPT, WAN, worker, Unity or microphone.",
+    "One local process; round means are not production percentiles."
+  ],
+  "samples": [
+    {
+      "round": 1,
+      "variant": "temporary",
+      "elapsed_ms": 664.9347999991733,
+      "tcp_connections": 12,
+      "requests": 12
+    },
+    {
+      "round": 1,
+      "variant": "pooled",
+      "elapsed_ms": 232.32580000330927,
+      "tcp_connections": 1,
+      "requests": 12
+    },
+    {
+      "round": 2,
+      "variant": "pooled",
+      "elapsed_ms": 230.98860000027344,
+      "tcp_connections": 1,
+      "requests": 12
+    },
+    {
+      "round": 2,
+      "variant": "temporary",
+      "elapsed_ms": 713.0314000023645,
+      "tcp_connections": 12,
+      "requests": 12
+    },
+    {
+      "round": 3,
+      "variant": "temporary",
+      "elapsed_ms": 635.6830000004265,
+      "tcp_connections": 12,
+      "requests": 12
+    },
+    {
+      "round": 3,
+      "variant": "pooled",
+      "elapsed_ms": 235.0869000001694,
+      "tcp_connections": 1,
+      "requests": 12
+    },
+    {
+      "round": 4,
+      "variant": "pooled",
+      "elapsed_ms": 233.73269999865443,
+      "tcp_connections": 1,
+      "requests": 12
+    },
+    {
+      "round": 4,
+      "variant": "temporary",
+      "elapsed_ms": 709.3553000013344,
+      "tcp_connections": 12,
+      "requests": 12
+    },
+    {
+      "round": 5,
+      "variant": "temporary",
+      "elapsed_ms": 696.1860000010347,
+      "tcp_connections": 12,
+      "requests": 12
+    },
+    {
+      "round": 5,
+      "variant": "pooled",
+      "elapsed_ms": 235.8001000029617,
+      "tcp_connections": 1,
+      "requests": 12
+    },
+    {
+      "round": 6,
+      "variant": "pooled",
+      "elapsed_ms": 233.52109999541426,
+      "tcp_connections": 1,
+      "requests": 12
+    },
+    {
+      "round": 6,
+      "variant": "temporary",
+      "elapsed_ms": 637.8697000036482,
+      "tcp_connections": 12,
+      "requests": 12
+    }
+  ],
+  "summary": {
+    "temporary": {
+      "rounds": 6,
+      "mean_ms": 676.1767000013302,
+      "median_ms": 680.560400000104,
+      "min_ms": 635.6830000004265,
+      "max_ms": 713.0314000023645
+    },
+    "pooled": {
+      "rounds": 6,
+      "mean_ms": 233.57586666679708,
+      "median_ms": 233.62689999703434,
+      "min_ms": 230.98860000027344,
+      "max_ms": 235.8001000029617
+    }
+  }
+}

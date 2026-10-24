@@ -1,7 +1,9 @@
 import os
+import time
 import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+from contextlib import asynccontextmanager
 
 import asyncpg
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
@@ -35,6 +37,7 @@ from .schemas import (
     QuickAccessIn,
 )
 from .services import (
+    NEOTALK_API_TIMEOUT_SECONDS,
     check_video,
     integration_status,
     invalidate_agent_context_cache,
@@ -43,6 +46,13 @@ from .services import (
     transcribe_audio,
     translate_to_glosses,
 )
+from .service_http import http_lifespan
+
+
+@asynccontextmanager
+async def api_lifespan(app: FastAPI):
+    async with http_lifespan((NEOTALK_API_TIMEOUT_SECONDS, 45)), lifespan(app):
+        yield
 
 def record_dict(record: asyncpg.Record) -> dict:
     return dict(record)
@@ -56,7 +66,7 @@ def cors_origins() -> list[str]:
 app = FastAPI(
     title="NeoTalk Live Rooms API",
     version="1.0.0",
-    lifespan=lifespan,
+    lifespan=api_lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -378,6 +388,7 @@ async def download_pose_words_pdf(pool: asyncpg.Pool = Depends(get_pool), _: Cur
 
 @app.post("/api/v1/agent/translate")
 async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
+    endpoint_started = time.perf_counter()
     if payload.batch_id and not await pool.fetchval(
         "SELECT b.id FROM translation_batches b JOIN rooms r ON r.id=b.room_id WHERE b.id=$1 AND (r.user_id=$2 OR $3='admin')",
         payload.batch_id, user.id, user.role,
@@ -392,6 +403,8 @@ async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depend
             "gloss_text": "",
             "skipped": True,
             "reason": str(exception.detail),
+            "trace_id": payload.trace_id,
+            "timings_ms": {"endpoint_ms": (time.perf_counter() - endpoint_started) * 1000},
         }
     if payload.batch_id:
         await pool.execute(
@@ -402,6 +415,8 @@ async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depend
             """,
             payload.batch_id, result["gloss_text"], result["prompt_id"], result["model"], result["agent_latency_ms"],
         )
+    result["trace_id"] = payload.trace_id
+    result["timings_ms"] = {**result.get("timings_ms", {}), "endpoint_ms": (time.perf_counter() - endpoint_started) * 1000}
     return result
 
 

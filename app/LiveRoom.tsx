@@ -8,6 +8,8 @@ import { batchFlushDelayMs, LIVE_IDLE_LOOP_GAP_MS, matchesActivePhrase, playback
 import { LiveSessionScope, OrderedTranscriptBuffer, retryLiveRequest } from "./liveResilience";
 import { playbackComplete } from "./playbackCompletion.mjs";
 import { buildPresentationPhrases, PresentationShuffle, PRESENTATION_DISCLOSURE } from "./presentationDeck";
+import { LiveTelemetry } from "./liveTelemetry";
+import { CaptureBacklog } from "./captureBacklog";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -30,11 +32,11 @@ type DocumentPictureInPictureApi = { requestWindow: (options?: { width?: number;
 type NativePlayback = { primaryId: string | null; externalId: string | null; primaryDone: boolean; externalDone: boolean; externalRequired: boolean; primaryFrame: number; externalFrame: number };
 const emptyNativePlayback = (): NativePlayback => ({ primaryId: null, externalId: null, primaryDone: false, externalDone: false, externalRequired: false, primaryFrame: -1, externalFrame: -1 });
 type SharedPose = { phrase: string; pose: { content_url: string; fps?: number; frame_count?: number }; words: string[]; loadId?: string; traceId?: string; taskId?: string };
-type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean; playlistId?: string };
+type AvatarMessage = { type?: string; avatar?: string; status?: string; code?: string; message?: string; phrase?: string; pose?: SharedPose["pose"]; words?: unknown[]; capabilities?: string[]; stage?: string; traceId?: string; taskId?: string; loadId?: string; correlationId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean; playlistId?: string; timingsMs?: unknown; poseCacheHit?: unknown };
 type PoseDiagnostic = { at: string; output: "principal" | "mini-player"; batchId: number | null; event: string; stage?: string; code?: string; loadId?: string; correlationId?: string; traceId?: string; taskId?: string; poseId?: string; attempt?: number; elapsedMs?: number; networkMs?: number | null; acknowledgedPoseId?: boolean };
 type RoomResponse = { id: string; status: string };
 type BatchResponse = { id: string; status: string };
-type AgentTranslation = { gloss_text: string; prompt_id?: string; model?: string; agent_latency_ms?: number; skipped?: boolean; reason?: string };
+type AgentTranslation = { gloss_text: string; prompt_id?: string; model?: string; agent_latency_ms?: number; skipped?: boolean; reason?: string; timings_ms?: Record<string, unknown>; context_cache_hit?: boolean; catalog_word_count?: number };
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
 const avatarNames: Record<AvatarId, string> = { lia: "Lia", asuna: "Asuna", elia: "Elia" };
@@ -44,8 +46,9 @@ const LIVE_AGENT_CONCURRENCY = 2;
 // Keep the previous 864-word maximum capacity (24 * 36), split into shorter
 // jobs so preparation cannot balloon under normal pitch backpressure.
 const LIVE_PENDING_LIMIT = 72;
-const LIVE_RESUME_LIMIT = 8;
-const LIVE_BUFFER_LIMIT = 120;
+const LIVE_TEXT_BACKLOG_BYTES = 2 * 1024 * 1024;
+const LIVE_AUDIO_BACKLOG_BYTES = 16 * 1024 * 1024;
+
 // Full-clip Unity preparation grows with the clip length. Backpressure may
 // join fragments, but must not turn them into a much larger animation job.
 const LIVE_COMPOUND_BATCH_MAX_WORDS = LIVE_BATCH_MAX_WORDS;
@@ -119,6 +122,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const externalCurrentPoseRef = useRef<SharedPose | null>(null);
   const externalPoseRecoveryRef = useRef({ correlationId: "", attempts: 0 });
   const poseDiagnosticsRef = useRef<PoseDiagnostic[]>([]);
+  const telemetryRef = useRef(new LiveTelemetry());
   const avatarMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
@@ -129,6 +133,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const fallbackTranscriptionQueueRef = useRef<{ blob: Blob; generation: number; sequence: number }[]>([]);
   const fallbackTranscriptionInFlightRef = useRef(0);
   const transcriptionOverloadNoticeAtRef = useRef(0);
+  const transcriptionFailureNoticeAtRef = useRef(0);
   const recoverFallbackCaptureRef = useRef<() => void>(() => undefined);
   const heartbeatTimerRef = useRef<number | null>(null);
   const heartbeatInFlightRef = useRef(false);
@@ -136,7 +141,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const restartRecognitionRef = useRef<(delay?: number) => void>(() => undefined);
   const listeningRef = useRef(false);
   const microphoneMutedRef = useRef(false);
-  const pressurePausedRef = useRef(false);
+  const manualMuteRef = useRef(false);
+  const transcriptBacklogRef = useRef(new CaptureBacklog<LiveBatch>(LIVE_TEXT_BACKLOG_BYTES));
+  const audioBacklogRef = useRef(new CaptureBacklog<{ blob: Blob; generation: number; sequence: number }>(LIVE_AUDIO_BACKLOG_BYTES));
   const restartTimerRef = useRef<number | null>(null);
   const recognitionWatchdogRef = useRef<number | null>(null);
   const sessionHealthTimerRef = useRef<number | null>(null);
@@ -550,6 +557,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (!next) return;
     next.status = "playing";
     recordPoseDiagnostic("principal", { type: "neotalk:queue-dispatch", elapsedMs: next.admittedAt ? Date.now() - next.admittedAt : undefined }, next.id);
+    if (diagnostics) telemetryRef.current.mark(next.id, 'dispatched');
     latestPoseRef.current = null;
     expectedPoseCorrelationRef.current = null;
     void updateRemoteBatch(next.id, "translating");
@@ -564,7 +572,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     setAvatarError("");
     setAvatarStatus(`Enviando glosas para ${avatarNames[avatar]}`);
     const key = poseKey(next.glossText || "");
-    const prepared = prefetchedPosesRef.current.get(key) || recentPosesRef.current.get(key);
+    const prefetched = prefetchedPosesRef.current.get(key);
+    const prepared = prefetched || recentPosesRef.current.get(key);
+    if (diagnostics) telemetryRef.current.poseSource(next.id,
+      prepared && !prefetched && avatarSupportsSharedPoseRef.current ? 'browser-memory' : 'service');
     if (prepared) {
       prefetchedPosesRef.current.delete(key);
       latestPoseRef.current = prepared;
@@ -594,18 +605,23 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     refreshBatchView();
     const signal = sessionScopeRef.current.signal;
     const translationStartedAt = Date.now();
+    if (diagnostics) telemetryRef.current.mark(batch.id, 'translation_start');
     let translationAttempt = 0;
     const request = retryLiveRequest(() => {
       recordPoseDiagnostic("principal", { type: "neotalk:translation-request", attempt: ++translationAttempt }, batch.id);
+      if (diagnostics) telemetryRef.current.attempt(batch.id);
       return roomApi<AgentTranslation>("/agent/translate", {
       method: "POST",
       signal,
-      body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null }),
+      body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null, ...(diagnostics ? { trace_id: telemetryRef.current.trace(batch.id) } : {}) }),
       });
     }, signal).then((agent) => {
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       recordPoseDiagnostic("principal", { type: "neotalk:translation-ready", elapsedMs: Date.now() - translationStartedAt, attempt: translationAttempt }, batch.id);
+      if (diagnostics) { telemetryRef.current.mark(batch.id, 'translation_ready'); telemetryRef.current.server(batch.id, agent.timings_ms); }
+      if (diagnostics) telemetryRef.current.context(batch.id, agent.context_cache_hit, agent.catalog_word_count);
       if (agent.skipped || !agent.gloss_text.trim()) {
+        if (diagnostics) telemetryRef.current.outcome(batch.id, 'skipped');
         batch.status = "error";
         setAvatarError("");
         void updateRemoteBatch(batch.id, "error", agent.reason || "Trecho sem glosa disponível no catálogo.");
@@ -619,6 +635,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }).catch((reason) => {
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       recordPoseDiagnostic("principal", { type: "neotalk:translation-error", elapsedMs: Date.now() - translationStartedAt, attempt: translationAttempt }, batch.id);
+      if (diagnostics) { telemetryRef.current.mark(batch.id, 'translation_failed'); telemetryRef.current.outcome(batch.id, 'error'); }
       const message = reason instanceof Error ? reason.message : "O agente não conseguiu traduzir o lote.";
       batch.status = "error";
       if (diagnostics) setAvatarError(message);
@@ -631,7 +648,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       agentPromisesRef.current.delete(batch.id);
       pendingBatchesRef.current = pendingBatchesRef.current.filter(item => item.status !== "error");
-      if (pressurePausedRef.current) flushWordBuffer(true);
+      drainTranscriptBacklog();
       refreshBatchView();
       pretranslatePendingBatches();
       dispatchNextBatch();
@@ -659,6 +676,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     playbackTimerRef.current = null;
     if (!activeBatchRef.current) return;
     const completedBatch = activeBatchRef.current;
+    if (diagnostics) telemetryRef.current.outcome(completedBatch.id, 'complete');
     recordPoseDiagnostic("principal", { type: `neotalk:completion-${completion}`, elapsedMs: completedBatch.admittedAt ? Date.now() - completedBatch.admittedAt : undefined }, completedBatch.id);
     completedBatch.status = "done";
     setCompletedHistory((history) => [{ ...completedBatch }, ...history].slice(0, 50));
@@ -669,7 +687,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     avatarBusyRef.current = false;
     avatarCommandAcknowledgedRef.current = false;
     pretranslatePendingBatches();
-    if (pressurePausedRef.current) flushWordBuffer(true);
+    drainTranscriptBacklog();
     refreshBatchView();
     dispatchNextBatch();
     scheduleIdleLoop();
@@ -709,6 +727,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (!id || data.loadId !== id || !Number.isInteger(packet.frame) || !Number.isInteger(packet.frameCount)
         || packet.frame! < 0 || packet.frameCount! < 1 || packet.frame! >= packet.frameCount!) return;
     if (!["preparing", "started", "progress", "finished"].includes(data.status || "")) return;
+    if (diagnostics && activeBatchRef.current && !idleLoopActiveRef.current) {
+      telemetryRef.current.frame(activeBatchRef.current.id, external ? 'external' : 'primary', data.loadId!, data.status!, packet.frame!, packet.frameCount!, pendingBatchesRef.current[0]?.status === 'ready');
+    }
     if (data.status === "finished") {
       if (packet.frame !== packet.frameCount! - 1) return;
       if (external) native.externalDone = true;
@@ -744,6 +765,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
     const failedBatch = activeBatchRef.current;
     if (failedBatch) {
+      if (diagnostics) telemetryRef.current.outcome(failedBatch.id, 'error');
       failedBatch.status = "error";
       void updateRemoteBatch(failedBatch.id, "error", "O avatar recusou o lote após as retentativas.");
     }
@@ -752,7 +774,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     setAvatarError("");
     setAvatarStatus(`${avatarNames[avatar]} seguindo com a próxima frase`);
     pretranslatePendingBatches();
-    if (pressurePausedRef.current) flushWordBuffer(true);
+    drainTranscriptBacklog();
     refreshBatchView();
     dispatchNextBatch();
     scheduleIdleLoop();
@@ -822,63 +844,78 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     avatarRetryTimerRef.current = window.setTimeout(retryCurrentAvatarPhrase, LIVE_AVATAR_RETRY_DELAY_MS);
   };
 
+  function admitWorkingBatch(batch: LiveBatch) {
+    clearIdleLoopTimer();
+    pendingBatchesRef.current.push(batch);
+    desiredBatchStatusRef.current.set(batch.id, "queued");
+    refreshBatchView();
+    pretranslatePendingBatches();
+    dispatchNextBatch();
+  }
+
+  function drainTranscriptBacklog() {
+    if (!listeningRef.current) return;
+    const wasStaged = transcriptBacklogRef.current.length > 0;
+    while (pendingBatchesRef.current.length < LIVE_PENDING_LIMIT && transcriptBacklogRef.current.length) {
+      const batch = transcriptBacklogRef.current.shift();
+      if (batch) admitWorkingBatch(batch);
+    }
+    if (wasStaged && !transcriptBacklogRef.current.length && diagnostics) setBackendStatus("Buffer de captura escoado");
+  }
+
   const enqueueBatch = (text: string) => {
     if (!listeningRef.current) return false;
     const normalized = text.replace(/\s+/g, " ").trim();
     if (!normalized) return false;
     const tail = pendingBatchesRef.current.at(-1);
-    if (pendingBatchesRef.current.length >= 3 && tail?.status === "queued"
+    // New arrivals never jump ahead of staged text, even if a working slot opens.
+    if (!transcriptBacklogRef.current.length && pendingBatchesRef.current.length >= 3 && tail?.status === "queued"
         && tail.text.length + 1 + normalized.length <= 480
         && tail.text.split(" ").length + normalized.split(" ").length <= LIVE_COMPOUND_BATCH_MAX_WORDS) {
       tail.text += ` ${normalized}`;
       refreshBatchView();
       return true;
     }
-    // Never evict an accepted phrase or reset Unity to catch up. At sustained
-    // overload, pause admission visibly while the existing queue keeps playing.
-    if (pendingBatchesRef.current.length >= LIVE_PENDING_LIMIT) {
-      pauseCaptureForPressure();
+    const staged = transcriptBacklogRef.current.length > 0 || pendingBatchesRef.current.length >= LIVE_PENDING_LIMIT;
+    // Estimate UTF-16 storage plus per-entry metadata. No disk/audio retention.
+    const bytes = normalized.length * 2 + 128;
+    if (staged && !transcriptBacklogRef.current.canAccept(bytes)) {
+      if (diagnostics) telemetryRef.current.blocked();
       return false;
     }
-    clearIdleLoopTimer();
     const batch: LiveBatch = { id: ++batchIdRef.current, text: normalized, admittedAt: Date.now(), status: "queued" };
-    recordPoseDiagnostic("principal", { type: "neotalk:queue-admitted" }, batch.id);
-    pendingBatchesRef.current.push(batch);
-    desiredBatchStatusRef.current.set(batch.id, "queued");
-    refreshBatchView();
-    pretranslatePendingBatches();
-    dispatchNextBatch();
-    if (pendingBatchesRef.current.length >= LIVE_PENDING_LIMIT) pauseCaptureForPressure();
+    if (diagnostics) telemetryRef.current.admit(batch.id, pendingBatchesRef.current.length + transcriptBacklogRef.current.length + 1);
+    recordPoseDiagnostic("principal", { type: staged ? "neotalk:queue-staged" : "neotalk:queue-admitted" }, batch.id);
+    if (staged) {
+      transcriptBacklogRef.current.push(batch, bytes);
+      if (diagnostics) setBackendStatus("Captura contínua · trechos aguardando sinalização");
+      return true;
+    }
+    admitWorkingBatch(batch);
     return true;
   };
-
-  function pauseCaptureForPressure() {
-    if (pressurePausedRef.current) return;
-    pressurePausedRef.current = true;
-    microphoneMutedRef.current = true;
-    setMicrophoneMuted(true);
-    if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
-    try { recognitionRef.current?.abort(); } catch { /* already stopped */ }
-    // Do not abort accepted transcription requests: they still need draining.
-    fallbackStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = false; });
-    setAvatarStatus("Microfone pausado por acúmulo · os sinais continuam");
-    showToast("A sinalização acumulou trechos. O microfone foi pausado; a fila continua. Aguarde e toque em Ativar microfone.");
-  }
 
   const flushWordBuffer = (force = false) => {
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     batchTimerRef.current = null;
     while (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
-      if (!enqueueBatch(wordBufferRef.current.slice(0, LIVE_BATCH_MAX_WORDS).join(" "))) return;
+      if (!enqueueBatch(wordBufferRef.current.slice(0, LIVE_BATCH_MAX_WORDS).join(" "))) {
+        if (diagnostics) telemetryRef.current.rejected(wordBufferRef.current.length);
+        wordBufferRef.current = [];
+        reportCaptureBacklogFull("texto");
+        return;
+      }
       wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS);
     }
     if (wordBufferRef.current.length >= LIVE_BATCH_MIN_WORDS || (force && wordBufferRef.current.length > 0)) {
       if (enqueueBatch(wordBufferRef.current.join(" "))) wordBufferRef.current.splice(0);
+      else { if (diagnostics) telemetryRef.current.rejected(wordBufferRef.current.length); wordBufferRef.current = []; reportCaptureBacklogFull("texto"); }
     }
   };
 
-  const addTranscriptToBuffer = (text: string) => {
-    if (!listeningRef.current || (microphoneMutedRef.current && !pressurePausedRef.current)) return;
+  const addTranscriptToBuffer = (text: string, acceptedAudio = false) => {
+    if (!listeningRef.current || (microphoneMutedRef.current && !acceptedAudio)) return;
+    if (diagnostics && !presentationRef.current.enabled) telemetryRef.current.input(text.split(/\s+/).filter(Boolean).length);
     if (presentationRef.current.enabled) {
       const caption: LiveBatch = { id: ++batchIdRef.current, text, status: "done" };
       // Keep genuine captions locally; illustrative gestures are never saved
@@ -889,19 +926,23 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       return;
     }
     const words = text.split(/\s+/).filter(Boolean);
-    const remaining = LIVE_BUFFER_LIMIT - wordBufferRef.current.length;
-    wordBufferRef.current.push(...words.slice(0, remaining));
-    if (words.length > remaining) {
-      pauseCaptureForPressure();
-      setBackendStatus("Limite de transcrição atingido · parte do trecho não foi admitida");
-      if (Date.now() - transcriptionOverloadNoticeAtRef.current > 15000) {
-        transcriptionOverloadNoticeAtRef.current = Date.now();
-        showToast("A capacidade de processamento foi excedida. Parte do trecho não entrou na fila; aguarde a sinalização antes de retomar.");
+    // Stream large final transcripts through small batches; do not truncate at
+    // the former 120-word scratch buffer or use capture as backpressure.
+    let offset = 0;
+    while (offset < words.length) {
+      const take = Math.min(LIVE_BATCH_MAX_WORDS - wordBufferRef.current.length, words.length - offset);
+      wordBufferRef.current.push(...words.slice(offset, offset + take));
+      offset += take;
+      if (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
+        if (!enqueueBatch(wordBufferRef.current.join(" "))) {
+          const rejected = wordBufferRef.current.length + words.length - offset;
+          if (diagnostics) telemetryRef.current.rejected(rejected);
+          wordBufferRef.current = [];
+          reportCaptureBacklogFull("texto");
+          break;
+        }
+        wordBufferRef.current = [];
       }
-    }
-    while (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
-      if (!enqueueBatch(wordBufferRef.current.slice(0, LIVE_BATCH_MAX_WORDS).join(" "))) break;
-      wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS);
     }
     if (batchTimerRef.current) window.clearTimeout(batchTimerRef.current);
     const queuedBatches = pendingBatchesRef.current.filter((batch) => batch.status !== "error").length + Number(Boolean(activeBatchRef.current));
@@ -993,6 +1034,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
             nativePlaybackRef.current.externalId = data.loadId;
           }
         } else if (data.type === "neotalk:status" && data.status === "loading_avatar") {
+          if (diagnostics && listeningRef.current && externalAvatarReadyRef.current) telemetryRef.current.reset();
           externalAvatarReadyRef.current = false;
           externalSupportsNativePlaybackRef.current = false;
         } else if (data.type === "neotalk:error" && ["pose_ack_timeout", "pose_load_failed"].includes(data.code || "")) {
@@ -1027,6 +1069,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         const pending = pendingBatchesRef.current.find((batch) => batch.status === "ready" && poseKey(batch.glossText || "") === key);
         recordPoseDiagnostic("principal", { ...data, elapsedMs: startedAt ? Date.now() - startedAt : undefined }, pending?.id ?? null);
         if (data.avatar === avatar && pending) {
+          if (diagnostics) telemetryRef.current.pose(pending.id, data.timingsMs, data.poseCacheHit, data.traceId);
           prefetchedPosesRef.current.set(key, {
             phrase: data.phrase, pose: data.pose,
             words: Array.isArray(data.words) ? data.words.map(String) : [],
@@ -1058,6 +1101,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
       if (data.type === "neotalk:pose-ready" && data.phrase && data.pose?.content_url) {
         if (!isCurrentAvatarPhrase(data.phrase)) return;
+        if (diagnostics && activeBatchRef.current && !idleLoopActiveRef.current)
+          telemetryRef.current.pose(activeBatchRef.current.id, data.timingsMs, data.poseCacheHit, data.traceId);
         const shared: SharedPose = { phrase: data.phrase, pose: data.pose, words: Array.isArray(data.words) ? data.words.map(String) : [], loadId: data.loadId, traceId: data.traceId, taskId: data.taskId };
         latestPoseRef.current = shared;
         if (shared.loadId) expectedPoseCorrelationRef.current = shared.loadId;
@@ -1090,6 +1135,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         }, 100);
       } else if (data.type === "neotalk:status" && data.status) {
         if (data.status === "loading_avatar") {
+          if (diagnostics && listeningRef.current && embeddedAvatarReadyRef.current) telemetryRef.current.reset();
           embeddedAvatarReadyRef.current = false;
           avatarReadyRef.current = false;
           avatarSupportsNativePlaybackRef.current = false;
@@ -1193,9 +1239,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const pumpFallbackTranscriptions = () => {
+    while (fallbackTranscriptionQueueRef.current.length < LIVE_TRANSCRIPTION_BACKLOG && audioBacklogRef.current.length) {
+      const next = audioBacklogRef.current.shift();
+      if (next) fallbackTranscriptionQueueRef.current.push(next);
+    }
     while (
       fallbackTranscriptionInFlightRef.current < LIVE_TRANSCRIPTION_CONCURRENCY
       && fallbackTranscriptionQueueRef.current.length
+      && orderedTranscriptsRef.current.bufferedCompletions < LIVE_TRANSCRIPTION_BACKLOG
     ) {
       const queued = fallbackTranscriptionQueueRef.current.shift();
       if (!queued) return;
@@ -1203,47 +1254,64 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       const ordered = orderedTranscriptsRef.current;
       const signal = captureControllerRef.current.signal;
       const deliver = (text: string) => {
-        if (!listeningRef.current || (microphoneMutedRef.current && !pressurePausedRef.current) || signal.aborted || generation !== fallbackCaptureGenerationRef.current) return;
+        if (!listeningRef.current || signal.aborted || generation !== fallbackCaptureGenerationRef.current) return;
         for (const transcript of ordered.complete(sequence, text)) {
           interruptIdleLoopForSpeech();
           setLastCaption(transcript);
           setInterimCaption("");
-          addTranscriptToBuffer(transcript);
+          addTranscriptToBuffer(transcript, true);
         }
       };
       fallbackTranscriptionInFlightRef.current += 1;
+      const asrStarted = performance.now();
       void retryLiveRequest(() => apiRequest<{ text: string }>("/agent/transcribe", {
         method: "POST",
         signal,
         headers: { "Content-Type": blob.type.split(";", 1)[0] },
         body: blob,
       }), signal).then(({ text }) => {
+        if (diagnostics && !signal.aborted) telemetryRef.current.transcription(performance.now() - asrStarted, true);
         deliver(text || "");
       }).catch(() => {
+        if (diagnostics && !signal.aborted) telemetryRef.current.transcription(performance.now() - asrStarted, false);
         // A failed slot must release later successful slots, never block them.
         deliver("");
-        if (!signal.aborted && diagnostics) setBackendStatus("Trecho de áudio não transcrito");
+        if (!signal.aborted && listeningRef.current && generation === fallbackCaptureGenerationRef.current) {
+          setBackendStatus("Trecho de áudio não transcrito");
+          if (Date.now() - transcriptionFailureNoticeAtRef.current >= 15000) {
+            transcriptionFailureNoticeAtRef.current = Date.now();
+            showToast("Um trecho de áudio não pôde ser transcrito. O microfone continua ativo; repita o trecho se necessário.");
+          }
+        }
       }).finally(() => {
         fallbackTranscriptionInFlightRef.current = Math.max(0, fallbackTranscriptionInFlightRef.current - 1);
         pumpFallbackTranscriptions();
+        drainTranscriptBacklog();
       });
     }
   };
 
-  const queueFallbackTranscription = (blob: Blob, generation: number) => {
-    if (fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG) {
-      // Do not silently drop a queued spoken passage. Discard only this new
-      // chunk and signal overload to the presenter (not inside the broadcast).
-      setBackendStatus("Rede lenta · um trecho de áudio não pôde entrar na fila");
-      if (Date.now() - transcriptionOverloadNoticeAtRef.current > 15000) {
-        transcriptionOverloadNoticeAtRef.current = Date.now();
-        showToast("A conexão está atrasando o áudio. Um trecho não pôde ser processado.");
-      }
-      return;
+  function reportCaptureBacklogFull(kind: "texto" | "áudio") {
+    setBackendStatus(`Buffer local de ${kind} cheio · parte do trecho não foi admitida`);
+    if (Date.now() - transcriptionOverloadNoticeAtRef.current > 15000) {
+      transcriptionOverloadNoticeAtRef.current = Date.now();
+      showToast(`O processamento não acompanhou a captura e o buffer de ${kind} encheu. Parte do trecho não entrou na fila; o microfone continua ativo.`);
     }
-    fallbackTranscriptionQueueRef.current.push({ blob, generation, sequence: orderedTranscriptsRef.current.issue() });
+  }
+
+  const queueFallbackTranscription = (blob: Blob, generation: number) => {
+    if (!listeningRef.current || generation !== fallbackCaptureGenerationRef.current || !blob.size) return;
+    const staged = audioBacklogRef.current.length > 0 || fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG;
+    const bytes = blob.size + 128;
+    if (staged && !audioBacklogRef.current.canAccept(bytes)) {
+      if (diagnostics) telemetryRef.current.rejectAudio();
+      reportCaptureBacklogFull("áudio");
+      return; // Explicit resource failure; never mute, evict accepted audio or create a sequence hole.
+    }
+    const item = { blob, generation, sequence: orderedTranscriptsRef.current.issue() };
+    if (staged) audioBacklogRef.current.push(item, bytes);
+    else fallbackTranscriptionQueueRef.current.push(item);
     pumpFallbackTranscriptions();
-    if (listeningRef.current && fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG) pauseCaptureForPressure();
   };
 
   const startFallbackChunk = () => {
@@ -1262,14 +1330,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       clearFallbackChunkTimer();
       if (fallbackRecorderRef.current === recorder) fallbackRecorderRef.current = null;
       if (generation !== fallbackCaptureGenerationRef.current) return;
-      const shouldProcess = listeningRef.current && !microphoneMutedRef.current && track.readyState === "live";
-      if (shouldProcess) window.setTimeout(startFallbackChunk, 30);
+      const shouldProcess = listeningRef.current;
+      if (shouldProcess && !microphoneMutedRef.current && track.readyState === "live") window.setTimeout(startFallbackChunk, 30);
       if (!shouldProcess || !chunks.length) return;
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
       queueFallbackTranscription(blob, generation);
     };
     recorder.onerror = () => {
-      if (generation !== fallbackCaptureGenerationRef.current || !listeningRef.current || microphoneMutedRef.current) return;
+      if (generation !== fallbackCaptureGenerationRef.current || fallbackRecorderRef.current !== recorder || !listeningRef.current || microphoneMutedRef.current) return;
       recoverFallbackCaptureRef.current();
     };
     recorder.start();
@@ -1282,12 +1350,24 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
   };
 
-  const stopFallbackCapture = (releaseStream = true) => {
+  const stopFallbackCapture = (releaseStream = true, discardAccepted = true) => {
+    if (!releaseStream || !discardAccepted) {
+      // Manual mute/device replacement stops recording, not accepted ASR work.
+      clearFallbackChunkTimer();
+      try { if (fallbackRecorderRef.current?.state === "recording") fallbackRecorderRef.current.stop(); } catch { /* already stopped */ }
+      fallbackRecorderRef.current = null;
+      if (releaseStream) {
+        fallbackStreamRef.current?.getTracks().forEach(track => track.stop());
+        fallbackStreamRef.current = null;
+      }
+      return;
+    }
     fallbackCaptureGenerationRef.current += 1;
     captureControllerRef.current.abort();
     captureControllerRef.current = new AbortController();
     orderedTranscriptsRef.current = new OrderedTranscriptBuffer();
     fallbackTranscriptionQueueRef.current = [];
+    audioBacklogRef.current.clear();
     clearFallbackChunkTimer();
     try { if (fallbackRecorderRef.current?.state === "recording") fallbackRecorderRef.current.stop(); } catch { /* já encerrado */ }
     fallbackRecorderRef.current = null;
@@ -1312,7 +1392,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     fallbackRecoveryInFlightRef.current = true;
     const signal = sessionScopeRef.current.signal;
     try {
-      stopFallbackCapture();
+      stopFallbackCapture(true, false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) {
         stream.getTracks().forEach((track) => track.stop());
@@ -1387,13 +1467,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   }
 
   const stopLiveRoom = () => {
+    if (diagnostics) telemetryRef.current.cancelPending();
     listeningRef.current = false;
     presentationRef.current.speechUntil = 0;
     presentationRef.current.current = "";
     presentationRef.current.playing = false;
     sessionScopeRef.current.end();
     microphoneMutedRef.current = false;
-    pressurePausedRef.current = false;
+    manualMuteRef.current = false;
     setMicrophoneMuted(false);
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
@@ -1419,6 +1500,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
     playbackTimerRef.current = null;
     pendingBatchesRef.current = [];
+    transcriptBacklogRef.current.clear();
     activeBatchRef.current = null;
     avatarBusyRef.current = false;
     avatarPlaybackStartedRef.current = false;
@@ -1501,8 +1583,12 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       await roomApi<RoomResponse>(`/rooms/${room.id}/start`, { method: "POST", signal });
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       roomIdRef.current = room.id;
-      pressurePausedRef.current = false;
+      transcriptionFailureNoticeAtRef.current = 0;
+      if (diagnostics) telemetryRef.current.begin(`live_${Date.now().toString(36)}`);
+      manualMuteRef.current = false;
       roomStartedAtRef.current = Date.now();
+      transcriptBacklogRef.current.clear();
+      audioBacklogRef.current.clear();
       remoteBatchIdsRef.current.clear();
       desiredBatchStatusRef.current.clear();
       agentResultsRef.current.clear();
@@ -1631,7 +1717,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       restartRecognitionRef.current = restartRecognition;
       listeningRef.current = true;
       microphoneMutedRef.current = false;
-      pressurePausedRef.current = false;
       setMicrophoneMuted(false);
       setRecording(true);
       setTranscriptionEngine("browser");
@@ -1694,11 +1779,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const toggleMicrophone = () => {
     if (!recording) return;
-    if (pressurePausedRef.current && (pendingBatchesRef.current.length > LIVE_RESUME_LIMIT || fallbackTranscriptionQueueRef.current.length > 2 || wordBufferRef.current.length > LIVE_BATCH_MAX_WORDS)) {
-      showToast("A sinalização ainda está acumulada. Aguarde a fila diminuir para reativar o microfone.");
-      return;
-    }
     const nextMuted = !microphoneMutedRef.current;
+    manualMuteRef.current = nextMuted;
     microphoneMutedRef.current = nextMuted;
     if (nextMuted && presentationRef.current.enabled) {
       presentationRef.current.speechUntil = 0; presentationRef.current.playing = false;
@@ -1710,15 +1792,17 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       setInterimCaption("");
       flushWordBuffer(true);
       try { recognitionRef.current?.abort(); } catch { /* reconhecimento já encerrado */ }
-      if (transcriptionEngine === "server") stopFallbackCapture(false);
+      fallbackStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = false; });
+      if (fallbackStreamRef.current) stopFallbackCapture(false);
       setAvatarStatus(idleLoopActiveRef.current ? "Microfone mutado · loop ativo" : `${avatarNames[avatar]} aguardando em loop`);
       scheduleIdleLoop(0);
     } else {
-      pressurePausedRef.current = false;
       fallbackStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = true; });
       recognitionActivityAtRef.current = Date.now();
-      if (transcriptionEngine === "server") startFallbackChunk();
-      else restartRecognitionRef.current(0);
+      if (fallbackStreamRef.current) {
+        if (fallbackStreamRef.current.getAudioTracks()[0]?.readyState === "live") startFallbackChunk();
+        else recoverFallbackCaptureRef.current();
+      } else restartRecognitionRef.current(0);
       setAvatarStatus("Microfone reativado");
     }
   };
@@ -1728,16 +1812,20 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       // Visibility can change after the external final frame arrived. Re-check
       // completion immediately rather than waiting for a throttled watchdog.
       finishNativePlayback();
-      if (offline && document.visibilityState === "hidden" && listeningRef.current && !microphoneMutedRef.current) {
+      if (offline && document.visibilityState === "hidden" && listeningRef.current) {
+        if (manualMuteRef.current) return;
+        manualMuteRef.current = true;
         microphoneMutedRef.current = true;
         setMicrophoneMuted(true);
         setInterimCaption("");
+        fallbackStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = false; });
         stopFallbackCapture(false);
         setAvatarStatus("Microfone pausado ao sair do app · toque em Ativar microfone para retomar");
         return;
       }
       if (document.visibilityState === "hidden" || (!offline && !navigator.onLine) || !listeningRef.current) return;
       if (roomIdRef.current && !heartbeatInFlightRef.current) void runHeartbeat();
+      drainTranscriptBacklog();
       if (microphoneMutedRef.current) return;
       const stream = fallbackStreamRef.current;
       if (stream) {
@@ -1782,6 +1870,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   useEffect(() => () => {
     listeningRef.current = false;
+    transcriptBacklogRef.current.clear();
+    audioBacklogRef.current.clear();
     presentationRef.current.enabled = false;
     presentationRef.current.generation++;
     presentationRef.current.controller.abort();
@@ -1997,6 +2087,22 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
   };
 
+  const downloadLatencyReport = () => {
+    if (!diagnostics) return;
+    const report = { capturedAt: new Date().toISOString(), source: 'live-room',
+      avatar, mode: presentationRef.current.enabled ? 'presentation-not-translation' : 'translation',
+      asr: transcriptionEngine, visibility: document.visibilityState,
+      widgetVersion: 'unreported',
+      backlog: { workingBatches: pendingBatchesRef.current.length, bufferedWords: wordBufferRef.current.length,
+        text: transcriptBacklogRef.current.snapshot(), audio: audioBacklogRef.current.snapshot(),
+        audioWorking: fallbackTranscriptionQueueRef.current.length, audioInFlight: fallbackTranscriptionInFlightRef.current,
+        audioReordered: orderedTranscriptsRef.current.bufferedCompletions },
+      telemetry: telemetryRef.current.snapshot() };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');link.href=url;link.download='neotalk-latencia.json';link.click();
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+
   const visibleBatches = panelTab === "captions"
     ? [...batches.filter((batch) => batch.status !== "done"), ...completedHistory]
     : presentationMode ? completedHistory.slice(0, 4) : batches;
@@ -2030,7 +2136,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         {panelTab === "room" && <div className="config-block"><label>Nome da sala<input value={roomName} disabled={recording} onChange={(event) => setRoomName(event.target.value)} /></label><label>Avatar 3D<select value={avatar} disabled={recording || offline} onChange={(event) => selectAvatar(event.target.value as AvatarId)}>{!offline && <><option value="lia">Lia · NeoTalk</option><option value="asuna">Asuna · NeoTalk</option></>}<option value="elia">Elia · NeoTalk</option></select></label><div className="avatar-choice"><div className="avatar-bust"><i/><i/></div><div><b>{avatarNames[avatar]}</b><small>Avatar da sala · Libras</small></div><span>{avatarReady ? "✓" : "…"}</span></div></div>}
         <div className="config-block live-queue"><div className="block-title"><b>{panelTab === "captions" ? "Histórico de legendas" : "Tradução ao vivo"}</b><small>{panelTab === "captions" ? "Últimos 50 trechos concluídos desta sessão" : "Trechos contínuos · últimas frases mantêm o avatar ativo"} · {processedBatches} concluídos</small>{diagnostics && <span className={`backend-state ${backendStatus.includes("conect") || backendStatus.includes("sincronizado") || backendStatus.includes("salva") ? "online" : ""}`}><i />{backendStatus}</span>}</div>{visibleBatches.length ? <div className="batch-list">{visibleBatches.map((batch) => <div className={`batch-item ${batch.status}`} key={batch.id}><span>{batch.status === "done" ? "CONCLUÍDO" : batch.status === "playing" ? "AGORA" : batch.status === "ready" ? "A SEGUIR" : "PREPARANDO"}</span><p>{batch.text}{diagnostics && batch.glossText && <small>GLOSAS · {batch.glossText}</small>}</p></div>)}</div> : <div className="queue-empty"><span>⌁</span><p>{recording ? processedBatches ? "A tradução continua ouvindo." : "Ouvindo o primeiro trecho…" : "Os trechos falados aparecerão aqui."}</p></div>}</div>
         <div className="config-block"><div className="block-title"><b>Transmitir a sala</b><small>Avatar e legendas continuam sincronizados em qualquer saída.</small></div>{externalPlayerMode ? <button className="output-button active-output" onClick={closeExternalPlayer}><span>×</span><div><b>Fechar saída externa</b><small>{externalPlayerMode === "pip" ? "Mini-player flutuante ativo" : "Janela separada ativa"}</small></div><i>●</i></button> : <><button className="output-button" onClick={() => void openExternalPlayer("pip")}><span>▣</span><div><b>Mini-player flutuante</b><small>Sempre visível e com tamanho ajustável</small></div><i>→</i></button><button className="output-button" onClick={() => void openExternalPlayer("window")}><span>↗</span><div><b>Abrir em outra janela</b><small>Para outra aba, monitor ou captura de janela</small></div><i>→</i></button></>}<button className="output-button" onClick={() => { setCameraGuideOpen((value) => !value); if (!externalPlayerMode) void openExternalPlayer("window"); }}><span>◎</span><div><b>Usar no Meet ou Zoom</b><small>Saída para OBS Virtual Camera</small></div><i>{cameraGuideOpen ? "−" : "+"}</i></button>{cameraGuideOpen && <div className="camera-guide"><b>Transformar em câmera</b><ol><li>No OBS, adicione uma fonte <strong>Captura de janela</strong>.</li><li>Selecione <strong>NeoTalk · Tradução em Libras</strong>.</li><li>Clique em <strong>Iniciar câmera virtual</strong>.</li><li>No Meet ou Zoom, escolha <strong>OBS Virtual Camera</strong>.</li></ol><small>O navegador não pode criar uma câmera do sistema sozinho. Sem OBS, compartilhe a janela NeoTalk como tela.</small></div>}<button className="output-button" onClick={copyPlayerLink}><span>⌁</span><div><b>Copiar link direto</b><small>Somente avatar, sem as legendas da sala</small></div><i>→</i></button></div>
-        {diagnostics && <div className="config-block"><div className="block-title"><b>Diagnóstico dos players</b><small>Registra as últimas 120 etapas de carregamento, sem áudio ou frases.</small></div><button className="output-button" onClick={() => void copyPoseDiagnostics()}><span>↧</span><div><b>Copiar diagnóstico</b><small>Principal e mini-player · tempos e IDs</small></div><i>→</i></button></div>}
+        {diagnostics && <div className="config-block"><div className="block-title"><b>Diagnóstico dos players</b><small>Dados técnicos disponíveis apenas para administradores.</small></div><button className="output-button" onClick={downloadLatencyReport}><span>↧</span><div><b>Baixar relatório de latência</b><small>Etapas, fila e amostras ausentes · sem fala ou glosas</small></div><i>→</i></button><button className="output-button" onClick={() => void copyPoseDiagnostics()}><span>↧</span><div><b>Copiar diagnóstico</b><small>Últimos 120 eventos dos players · tempos e IDs</small></div><i>→</i></button></div>}
       </aside>
     </div>
   </>;

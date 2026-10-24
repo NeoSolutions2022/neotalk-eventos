@@ -9,6 +9,8 @@ import asyncpg
 import httpx
 from fastapi import HTTPException
 
+from .service_http import service_client
+
 
 NEOTALK_API_BASE_URL = os.getenv("NEOTALK_API_BASE_URL", "https://infra-neotalk-api.k3p3ex.easypanel.host").rstrip("/")
 NEOTALK_API_KEY = os.getenv("NEOTALK_API_KEY", "")
@@ -52,6 +54,7 @@ class AgentContext:
 
 _agent_context_cache: AgentContext | None = None
 _agent_context_lock = asyncio.Lock()
+_agent_context_generation = 0
 
 
 class AgentResponseIncomplete(Exception):
@@ -78,7 +81,7 @@ async def transcribe_audio(content: bytes, content_type: str) -> str:
         raise HTTPException(status_code=422, detail="O trecho de áudio está vazio.")
     extension = "ogg" if "ogg" in content_type else "mp4" if "mp4" in content_type else "webm"
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with service_client(timeout=45) as client:
             response = await client.post(
                 f"{OPENAI_BASE_URL}/audio/transcriptions",
                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
@@ -105,7 +108,7 @@ async def sync_pose_words(pool: asyncpg.Pool) -> dict:
     words: list[str] = []
     page = 1
     pages = 1
-    async with httpx.AsyncClient(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
+    async with service_client(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
         while page <= pages:
             response = await client.get(
                 f"{NEOTALK_API_BASE_URL}/pose-words",
@@ -136,7 +139,8 @@ async def sync_pose_words(pool: asyncpg.Pool) -> dict:
 
 
 def invalidate_agent_context_cache() -> None:
-    global _agent_context_cache
+    global _agent_context_cache, _agent_context_generation
+    _agent_context_generation += 1
     _agent_context_cache = None
 
 
@@ -146,39 +150,46 @@ async def _get_agent_context(pool: asyncpg.Pool) -> tuple[AgentContext, bool]:
     if _agent_context_cache and _agent_context_cache.expires_at > now:
         return _agent_context_cache, True
 
-    async with _agent_context_lock:
-        now = time.monotonic()
-        if _agent_context_cache and _agent_context_cache.expires_at > now:
-            return _agent_context_cache, True
+    # A sync/activation may invalidate while the DB reads below are awaiting.
+    # Never republish that older context after invalidation. Bound retries under
+    # continuous administrative changes instead of holding requests indefinitely.
+    for _ in range(3):
+        async with _agent_context_lock:
+            now = time.monotonic()
+            if _agent_context_cache and _agent_context_cache.expires_at > now:
+                return _agent_context_cache, True
+            generation = _agent_context_generation
+            prompt_record = await pool.fetchrow("SELECT * FROM agent_prompts WHERE is_active = TRUE LIMIT 1")
+            rows = await pool.fetch("SELECT word FROM pose_words ORDER BY word LIMIT 8000")
+            if generation != _agent_context_generation:
+                continue
+            if not prompt_record:
+                raise HTTPException(status_code=409, detail="Não existe prompt ativo para o agente.")
+            catalog = tuple(row["word"] for row in rows)
+            if not catalog:
+                raise HTTPException(status_code=409, detail="O catálogo está vazio. Sincronize o dataset antes de traduzir.")
 
-        prompt_record = await pool.fetchrow("SELECT * FROM agent_prompts WHERE is_active = TRUE LIMIT 1")
-        if not prompt_record:
-            raise HTTPException(status_code=409, detail="Não existe prompt ativo para o agente.")
-        rows = await pool.fetch("SELECT word FROM pose_words ORDER BY word LIMIT 8000")
-        catalog = tuple(row["word"] for row in rows)
-        if not catalog:
-            raise HTTPException(status_code=409, detail="O catálogo está vazio. Sincronize o dataset antes de traduzir.")
-
-        prompt = dict(prompt_record)
-        instructions = (
-            f"{prompt['instructions']}\n\nCATÁLOGO AUTORIZADO ({len(catalog)} palavras):\n"
-            + " | ".join(catalog)
-            + "\n\nPara entradas ao vivo, traduza o trecho como uma unidade de sentido e forme uma sequência contínua de glosas. "
-            + "Quando o catálogo permitir, use duas ou mais glosas e evite devolver uma palavra isolada. "
-            + "Responda somente no formato solicitado e mantenha reasoning_summary curto, com no máximo duas frases."
-        )
-        fingerprint = hashlib.sha256(
-            f"{prompt['id']}:{prompt['version']}:{instructions}".encode("utf-8")
-        ).hexdigest()[:32]
-        _agent_context_cache = AgentContext(
-            prompt=prompt,
-            catalog=catalog,
-            allowed=frozenset(catalog),
-            instructions=instructions,
-            prompt_cache_key=f"neotalk-gloss-{fingerprint}",
-            expires_at=now + AGENT_CONTEXT_CACHE_TTL_SECONDS,
-        )
-        return _agent_context_cache, False
+            prompt = dict(prompt_record)
+            instructions = (
+                f"{prompt['instructions']}\n\nCATÁLOGO AUTORIZADO ({len(catalog)} palavras):\n"
+                + " | ".join(catalog)
+                + "\n\nPara entradas ao vivo, traduza o trecho como uma unidade de sentido e forme uma sequência contínua de glosas. "
+                + "Quando o catálogo permitir, use duas ou mais glosas e evite devolver uma palavra isolada. "
+                + "Responda somente no formato solicitado e mantenha reasoning_summary curto, com no máximo duas frases."
+            )
+            fingerprint = hashlib.sha256(
+                f"{prompt['id']}:{prompt['version']}:{instructions}".encode("utf-8")
+            ).hexdigest()[:32]
+            _agent_context_cache = AgentContext(
+                prompt=prompt,
+                catalog=catalog,
+                allowed=frozenset(catalog),
+                instructions=instructions,
+                prompt_cache_key=f"neotalk-gloss-{fingerprint}",
+                expires_at=time.monotonic() + AGENT_CONTEXT_CACHE_TTL_SECONDS,
+            )
+            return _agent_context_cache, False
+    raise HTTPException(status_code=503, detail="O catálogo está sendo atualizado. Tente novamente.")
 
 
 def _output_text(payload: dict) -> str:
@@ -216,9 +227,11 @@ def _openai_error_message(response: httpx.Response) -> str:
 
 
 async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
+    service_started = time.perf_counter()
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY não configurada no backend.")
     context, context_cache_hit = await _get_agent_context(pool)
+    context_ms = (time.perf_counter() - service_started) * 1000
     body = {
         "model": OPENAI_MODEL,
         "instructions": context.instructions,
@@ -252,7 +265,7 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
         OPENAI_MAX_OUTPUT_TOKENS,
         max(OPENAI_RETRY_MAX_OUTPUT_TOKENS, OPENAI_MAX_OUTPUT_TOKENS * 2),
     )
-    async with httpx.AsyncClient(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
+    async with service_client(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
         for attempt, max_output_tokens in enumerate(token_limits):
             response = await client.post(
                 f"{OPENAI_BASE_URL}/responses",
@@ -276,7 +289,9 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
                 else:
                     detail = "O agente retornou conteúdo incompleto mesmo após uma nova tentativa."
                 raise HTTPException(status_code=502, detail=detail) from exc
-    latency_ms = round((time.perf_counter() - started) * 1000)
+    provider_ms = (time.perf_counter() - started) * 1000
+    latency_ms = round(provider_ms)
+    validation_started = time.perf_counter()
     if response_payload is None or result is None:
         raise HTTPException(status_code=502, detail="O agente não concluiu a tradução.")
     requested = [str(word).strip().upper() for word in result.get("glosses", []) if str(word).strip()]
@@ -295,13 +310,20 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
         "model": OPENAI_MODEL,
         "openai_response_id": response_payload.get("id"),
         "agent_latency_ms": latency_ms,
+        "timings_ms": {
+            "context_ms": context_ms,
+            "provider_ms": provider_ms,
+            "validation_ms": (time.perf_counter() - validation_started) * 1000,
+            "service_ms": (time.perf_counter() - service_started) * 1000,
+        },
         "context_cache_hit": context_cache_hit,
+        "catalog_word_count": len(context.catalog),
         "cached_input_tokens": ((response_payload.get("usage") or {}).get("input_tokens_details") or {}).get("cached_tokens", 0),
     }
 
 
 async def submit_video(gloss_text: str) -> str:
-    async with httpx.AsyncClient(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
+    async with service_client(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
         response = await client.post(
             f"{NEOTALK_API_BASE_URL}{NEOTALK_VIDEO_SUBMIT_PATH}",
             headers=_neotalk_headers(),
@@ -317,7 +339,7 @@ async def submit_video(gloss_text: str) -> str:
 
 async def check_video(task_id: str) -> dict:
     path = NEOTALK_VIDEO_STATUS_PATH.format(task_id=task_id)
-    async with httpx.AsyncClient(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
+    async with service_client(timeout=NEOTALK_API_TIMEOUT_SECONDS) as client:
         response = await client.get(f"{NEOTALK_API_BASE_URL}{path}", headers=_neotalk_headers())
     if response.status_code == 202:
         return {"ready": False}
