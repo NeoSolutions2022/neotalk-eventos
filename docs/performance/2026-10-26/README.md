@@ -5,6 +5,10 @@ escondidos mudando datas. Homologação local já realizada foi marcada nas
 checklists de QUEUE-06b/PERF-03a; não equivale a ASR físico ou produção aprovada.
 PERF-03 recebeu uma subentrega de prefetch, ligada à redução das pausas.
 
+Atualização posterior no mesmo dia: [pool HTTPS do proxy e integração de dez
+lotes](proxy-pool/README.md), com ganho medido somente no componente de
+transporte. Não substitui nem reescreve os resultados anteriores abaixo.
+
 ## Implementação no repositório correto
 
 Correção do widget em [Avatar3DFrontend, PR #40](https://github.com/NeoSolutions2022/Avatar3DFrontend/pull/40):

@@ -13,3 +13,8 @@ test('prefetch evidence never copies unapproved report fields or free-form HTTP 
   assert.equal(evidence.browserVersion, null);
   assert.equal(evidence.analysis.consistentSampleGate, false);
 });
+
+test('integration gate declares its actual requested minimum without silently using five', () => {
+  assert.equal(summarizePrefetchValidation({}, {}, 10).analysis.minimum, 10);
+  assert.throws(() => summarizePrefetchValidation({}, {}, 0), /Invalid sample minimum/);
+});

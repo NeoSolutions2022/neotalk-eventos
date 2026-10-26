@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-26 — Transporte do proxy medido com HTTPS real
+
+- Avatar3DFrontend recebe pool próprio; não confundir com o pool anterior
+  deste backend. Benchmark real: 36 status equivalentes, média da rodada
+  1.502,17→824,90 ms. Não é ganho de 45% na reprodução da Elia.
+- Integração: dez lotes/70 palavras completos nos dois players Unity reais,
+  nenhum span obrigatório ausente, reset, pausa ou rejeição; ASR controlado.
+- Sumarizador permite mínimo explícito, com regressão para não aprovar dez
+  usando gate de cinco.
+- Relatório em docs/performance/2026-10-26/proxy-pool/README.md.
+
 ## 2026-10-26 — Evidências de prefetch e continuidade
 
 - Correção de corrida consulta/download preparada no Avatar3DFrontend PR #40,
