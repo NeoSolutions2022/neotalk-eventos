@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-26 — Evidências de prefetch e continuidade
+
+- Correção de corrida consulta/download preparada no Avatar3DFrontend PR #40,
+  sem mudança de WebGL. 28 testes Node + quatro de polling no avatar passaram.
+- Integração local com cinco lotes e dois Unity reais passou; pacote final
+  `.30` confirmou outros três lotes diferentes nas duas saídas sem reset/pausa.
+- Agregados sanitizados e método versionados; novo teste evita exportar campos
+  livres/segredos do relatório privado. 138 testes Node da plataforma passaram.
+- Não há ganho de velocidade, evento de uma hora ou produção aprovados.
+- Relatório: docs/performance/2026-10-26/README.md.
+
 ## 2026-10-23 — Homologação local isolada
 
 - Compose separado com plataforma e widget candidatos, banco/cache próprios e
