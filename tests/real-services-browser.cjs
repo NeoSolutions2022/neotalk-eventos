@@ -11,6 +11,9 @@ const target = Number(process.env.QA_TRANSCRIPTS || 3);
 const wpm = Number(process.env.QA_WPM || 180);
 const limitSeconds = Number(process.env.QA_MAX_SECONDS || (target >= 100 ? 2400 : 240));
 const mode = process.env.QA_OUTPUT || 'pip';
+const primaryView = process.env.QA_PRIMARY_VIEW || 'natural';
+if (!['natural', 'visible', 'offscreen'].includes(primaryView)) throw new Error('Invalid primary viewport configuration');
+if (primaryView === 'offscreen' && mode === 'primary') throw new Error('Offscreen test requires a visible external output');
 if (!Number.isInteger(target) || target < 1 || target > 200 || !Number.isFinite(wpm) || wpm < 60 || wpm > 240 || !['primary', 'pip', 'window'].includes(mode) || limitSeconds < 30 || limitSeconds > 3600) throw new Error('Invalid bounded QA configuration');
 const output = path.join(root, 'outputs', `real-services-${Date.now()}`);
 const phrases = process.env.QA_CACHE_REUSE === '1' ? ['Eu quero aprender Libras aqui com você.'] : [
@@ -26,7 +29,7 @@ if (phrases.some(text => text.split(/\s+/).length < 7 || text.split(/\s+/).lengt
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const normalize = text => text.replace(/\s+/g, ' ').trim();
 const report = { schema: 1, startedAt: new Date().toISOString(), configuration: {
-  targetTranscripts: target, wpm, output: mode, maxSeconds: limitSeconds,
+  targetTranscripts: target, wpm, output: mode, maxSeconds: limitSeconds, primaryView,
   workload: process.env.QA_CACHE_REUSE === '1' ? 'repeated-phrase-cache-check' : 'ten-phrase-pitch-cycle',
   services: 'real local candidates + remote GPT/NeoTalk', recognition: 'scripted final pt-BR transcripts; fake audio permission device',
   pip: 'native API when supported; actual window fallback, never a simulated shell',
@@ -150,6 +153,8 @@ async function exportTelemetry() {
     check(await page.evaluate(() => window.__qaRecognition.lang === 'pt-BR'), 'Portuguese recognition configuration');
     initialReady = await page.evaluate(() => window.__qa.events.filter(event => event.type === 'neotalk:ready'));
     check(initialReady.every(event => event.native), 'Both active outputs advertise native playback progress');
+    if (primaryView === 'visible') await page.locator('iframe.avatar-widget-frame').scrollIntoViewIfNeeded();
+    if (primaryView === 'offscreen') await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     startedAt = Date.now(); let nextInputAt = startedAt, nextSampleAt = startedAt;
     for (;;) {
       const now = Date.now();
@@ -167,6 +172,12 @@ async function exportTelemetry() {
           nativeFirst: window.__qa.events.filter(event => event.type === 'neotalk:playback-frame' && event.status === 'started').length,
           nativeLast: window.__qa.events.filter(event => event.type === 'neotalk:playback-frame' && event.status === 'finished' && event.frame === event.frameCount - 1).length,
           readyEvents: window.__qa.events.filter(event => event.type === 'neotalk:ready').length,
+          primaryViewport: (() => {
+            const rect = document.querySelector('iframe.avatar-widget-frame').getBoundingClientRect();
+            return { top: Math.round(rect.top), bottom: Math.round(rect.bottom), viewportHeight: innerHeight,
+              intersects: rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth,
+              documentVisibility: document.visibilityState };
+          })(),
         }));
         report.samples.push({ seconds: Math.round((now - startedAt) / 1000), submittedTranscripts: incoming.length,
           persistedBatches: batches.size, done: [...batches.values()].filter(batch => batch.status === 'done').length, ...sample });
@@ -187,8 +198,14 @@ async function exportTelemetry() {
     const exported = await exportTelemetry();
     const telemetry = exported.telemetry; report.metrics = telemetry.metrics; report.outcomes = telemetry.outcomes;
     report.pressure = telemetry.pressure; report.runtimeResets = telemetry.runtimeResets;
+    report.missing = telemetry.missing;
     check(exported.mode === 'translation', 'Translation mode, not presentation');
-    check(telemetry.missing.firstFrame === 0 && telemetry.missing.lastFrame === 0, 'All admitted batches have actual first and last frames');
+    if (primaryView === 'offscreen') {
+      check(report.samples.every(sample => sample.primaryViewport.intersects === false && sample.primaryViewport.documentVisibility === 'visible'),
+        'Primary iframe offscreen while the main document stays visible');
+      // Preserve missing-primary metrics. This separate continuity scenario
+      // approves only the visible external execution, never invented main frames.
+    } else check(telemetry.missing.firstFrame === 0 && telemetry.missing.lastFrame === 0, 'All admitted batches have actual first and last frames');
     check(telemetry.missing.serverTimings === 0 && (telemetry.missing.requiredPoseTimings ?? telemetry.missing.poseTimings) === 0,
       'Service spans present where required; explicit memory replay is not a missing request');
     if (process.env.QA_CACHE_REUSE === '1') check(telemetry.pose_sources?.browserMemory > 0, 'Browser-memory replay provenance is observed');
@@ -201,7 +218,8 @@ async function exportTelemetry() {
     const events = await page.evaluate(() => window.__qa.events);
     check(events.filter(event => event.type === 'neotalk:ready').length === initialReady.length, 'Native runtimes never reinitialized');
     const executions = telemetry.batches.flatMap(batch => batch.executions || []);
-    check(executions.filter(execution => execution.output === 'primary' && Number.isFinite(execution.first) && Number.isFinite(execution.last)).length >= target, 'Primary terminal frames for every batch');
+    report.primaryCompletedExecutions = executions.filter(execution => execution.output === 'primary' && Number.isFinite(execution.first) && Number.isFinite(execution.last)).length;
+    if (primaryView !== 'offscreen') check(report.primaryCompletedExecutions >= target, 'Primary terminal frames for every batch');
     if (mode !== 'primary') check(executions.filter(execution => execution.output === 'external' && Number.isFinite(execution.first) && Number.isFinite(execution.last)).length >= target, 'External terminal frames for every batch');
     check(report.pageErrors === 0, 'No uncaught main-page exceptions');
     await page.screenshot({ path: path.join(output, 'platform.png') });

@@ -9,6 +9,12 @@ Atualização posterior no mesmo dia: [pool HTTPS do proxy e integração de dez
 lotes](proxy-pool/README.md), com ganho medido somente no componente de
 transporte. Não substitui nem reescreve os resultados anteriores abaixo.
 
+Subentrega seguinte: [AUDIO-04 — captura gerenciada](../../AUDIO-04-MANAGED-CAPTURE-2026-10-26.md)
+e [PiP com principal fora da tela](../../PIP-OFFSCREEN-2026-10-26.md).
+152 testes/build passaram; os cenários visível/fora do viewport são separados,
+sem transformar a ausência de frames do principal suspenso em uma medição zero.
+Trello não foi atualizado nessa rodada por indisponibilidade de acesso.
+
 ## Implementação no repositório correto
 
 Correção do widget em [Avatar3DFrontend, PR #40](https://github.com/NeoSolutions2022/Avatar3DFrontend/pull/40):

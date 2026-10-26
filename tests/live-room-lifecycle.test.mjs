@@ -8,7 +8,7 @@ import ts from 'typescript';
 import { playbackComplete } from '../app/playbackCompletion.mjs';
 const compilerOptions = { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX };
 const sources = {};
-for (const name of ['LiveRoom', 'captureBacklog', 'liveTelemetry', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
+for (const name of ['LiveRoom', 'captureAudio', 'captureBacklog', 'liveTelemetry', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
   sources[name] = await readFile(new URL(`../app/${name}.${name === 'LiveRoom' ? 'tsx' : 'ts'}`, import.meta.url), 'utf8');
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
@@ -39,7 +39,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     './apiClient': { ApiError, apiRequest: async (path, options = {}) => { calls.push({ path, options }); return handler(path, options); } },
   };
   context.require = name => modules[name];
-  for (const name of ['captureBacklog', 'liveTelemetry', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
+  for (const name of ['captureAudio', 'captureBacklog', 'liveTelemetry', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
     context.exports = {};
     // Each CommonJS module owns its exports binding; global reuse breaks
     // functions that refer to other exports of their own module.
@@ -52,7 +52,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
     'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
-  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, telemetryRef, prefetchedPosesRef, dispatchNextBatch, manualMuteRef, transcriptBacklogRef, audioBacklogRef, drainTranscriptBacklog, recoverFallbackCaptureRef, presentationError };\n  return <>`);
+  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, captureSelectionRef, setCaptureDevice, setCaptureProfile, setCaptureCompatible, refreshCaptureDevices, telemetryRef, prefetchedPosesRef, dispatchNextBatch, manualMuteRef, transcriptBacklogRef, audioBacklogRef, drainTranscriptBacklog, recoverFallbackCaptureRef, presentationError };\n  return <>`);
   context.exports = {};
   vm.runInContext(ts.transpileModule(source, { compilerOptions }).outputText, context, { filename: 'LiveRoom.tsx' });
   const component = context.exports.default;
@@ -379,6 +379,48 @@ test('native generation ignores late completion after room stop', async () => {
   h.message({ type: 'neotalk:playback-frame', loadId: 'primary', status: 'finished', frame: 89, frameCount: 90 });
   assert.equal(h.qa.activeBatchRef.current, null);
   assert.equal(h.recording, false);
+});
+
+for (const [name, rect] of Object.entries({
+  above: { top: -500, bottom: -1, left: 0, right: 500, width: 500, height: 499 },
+  below: { top: 1000, bottom: 1500, left: 0, right: 500, width: 500, height: 500 },
+  collapsed: { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 },
+})) test(`offscreen primary (${name}) cannot block the real external last frame`, async () => {
+  const h = harness(async path => path === '/agent/translate' ? { gloss_text: 'TESTE' } : { id: 'qa' });
+  const external = h.external(); h.qa.avatarSupportsNativePlaybackRef.current = true;
+  h.qa.externalSupportsNativePlaybackRef.current = true;
+  h.context.window.innerHeight = 1000; h.context.window.innerWidth = 1440;
+  h.qa.frameRef.current.getBoundingClientRect = () => rect;
+  await h.qa.startLiveRoom(); h.qa.enqueueBatch('teste'); await flush();
+  h.message({ type:'neotalk:pose-ready', phrase:'TESTE', loadId:'p', pose:{content_url:'/test.pose'} });
+  h.message({ type:'neotalk:playing', correlationId:'p', loadId:'e' }, external);
+  const packet = { type:'neotalk:playback-frame', loadId:'e', frame:0, frameCount:90, status:'started' };
+  h.message(packet, external);
+  assert.ok(h.qa.activeBatchRef.current, 'starting is not completion');
+  h.message({...packet, status:'finished', frame:88}, external);
+  assert.ok(h.qa.activeBatchRef.current, 'nonterminal frame never releases the queue');
+  const count = h.commands.length;
+  const timerCount = h.timers.size;
+  h.message({type:'neotalk:error', code:'pose_ack_timeout', loadId:'p', correlationId:'p'});
+  assert.equal(h.commands.length, count, 'a late primary error cannot restart the active external pose');
+  assert.equal(h.timers.size, timerCount, 'nor schedule a delayed replay');
+  h.message({...packet, status:'finished', frame:89}, external);
+  assert.equal(h.qa.activeBatchRef.current, null);
+  assert.equal(h.recording, true); h.qa.stopLiveRoom();
+});
+
+test('visible or unknown primary geometry still requires its genuine final frame', async () => {
+  for (const rect of [undefined, {top:0,bottom:500,left:0,right:500,width:500,height:500}]) {
+    const h=harness(async path=>path==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'});
+    const external=h.external(); h.qa.avatarSupportsNativePlaybackRef.current=true; h.qa.externalSupportsNativePlaybackRef.current=true;
+    h.context.window.innerHeight=1000;h.context.window.innerWidth=1440;
+    if(rect) h.qa.frameRef.current.getBoundingClientRect=()=>rect;
+    await h.qa.startLiveRoom();h.qa.enqueueBatch('teste');await flush();
+    h.message({type:'neotalk:pose-ready',phrase:'TESTE',loadId:'p',pose:{content_url:'/test.pose'}});
+    h.message({type:'neotalk:playing',correlationId:'p',loadId:'e'},external);
+    h.message({type:'neotalk:playback-frame',loadId:'e',status:'finished',frame:89,frameCount:90},external);
+    assert.ok(h.qa.activeBatchRef.current);h.qa.stopLiveRoom();
+  }
 });
 
 test('closing the external output releases an already finished native primary', async () => {
@@ -721,4 +763,55 @@ test('a recorder constructor failure safely terminates the room instead of throw
   assert.equal(h.qa.listeningRef.current, false);
   assert.equal(h.track.stopped, true);
   assert.ok(h.toasts.some(text => text.includes('captura de áudio')));
+});
+
+test('selected microphone uses the same managed stream for recording even when WebSpeech exists', async () => {
+  const h = harness(); const requests = [], recorded = [];
+  const stream = { getTracks: () => [h.track], getAudioTracks: () => [h.track] };
+  h.track.readyState = 'live';
+  h.track.getSettings = () => ({ deviceId: 'selected-device', noiseSuppression: true });
+  h.navigator.mediaDevices.getSupportedConstraints = () => ({ deviceId: true, noiseSuppression: true });
+  h.navigator.mediaDevices.getUserMedia = async options => { requests.push(options); return stream; };
+  h.context.MediaRecorder = class { static isTypeSupported() { return true; } constructor(input) { recorded.push(input); this.state = 'inactive'; } start() { this.state = 'recording'; } stop() { this.state = 'inactive'; this.onstop?.(); } };
+  h.qa.setCaptureDevice('selected-device'); h.qa.setCaptureProfile('lecture'); h.render();
+  await h.context.qa.startLiveRoom();
+  assert.equal(h.qa.recognitionRef.current, null, 'native WebSpeech must not open its own capture');
+  assert.equal(requests.length, 1); assert.equal(recorded[0], stream);
+  assert.equal(requests[0].audio.deviceId.exact, 'selected-device');
+  assert.equal(requests[0].audio.noiseSuppression.ideal, true);
+  assert.notEqual(h.track.stopped, true);
+  h.qa.stopLiveRoom(); assert.equal(h.track.stopped, true);
+});
+
+test('compatible capture recovery retains frozen device/profile instead of switching to default', async () => {
+  const h = harness(); const requests = [];
+  h.track.readyState = 'live'; h.navigator.onLine = true;
+  h.navigator.mediaDevices.getSupportedConstraints = () => ({ deviceId: true, autoGainControl: true });
+  h.navigator.mediaDevices.getUserMedia = async options => { requests.push(options); return { getTracks: () => [h.track], getAudioTracks: () => [h.track] }; };
+  h.context.MediaRecorder = class { static isTypeSupported() { return true; } constructor() { this.state = 'inactive'; } start() { this.state = 'recording'; } stop() { this.state = 'inactive'; this.onstop?.(); } };
+  h.qa.setCaptureDevice('desk'); h.qa.setCaptureProfile('direct'); h.render();
+  await h.context.qa.startLiveRoom();
+  h.qa.setCaptureDevice('other'); h.qa.setCaptureProfile('lecture'); h.render();
+  h.qa.recoverFallbackCaptureRef.current(); await flush();
+  assert.equal(requests.length, 2);
+  for (const request of requests) { assert.equal(request.audio.deviceId.exact, 'desk'); assert.equal(request.audio.autoGainControl.ideal, false); }
+  h.qa.stopLiveRoom();
+});
+
+test('unavailable selected microphone never creates a room or silently switches hardware', async () => {
+  const h = harness(); let calls = 0;
+  h.navigator.mediaDevices.getSupportedConstraints = () => ({ deviceId: true });
+  h.navigator.mediaDevices.getUserMedia = async () => { calls++; throw new Error('NotFoundError'); };
+  h.qa.setCaptureDevice('unplugged'); h.render(); await h.context.qa.startLiveRoom();
+  assert.equal(calls, 1); assert.equal(h.calls.some(call => call.path === '/rooms'), false);
+  assert.equal(h.recording, false); assert.ok(h.toasts.length > 0);
+});
+
+test('listing microphones does not request permission, start capture or create a room', async () => {
+  const h = harness(); let calls = 0;
+  h.navigator.mediaDevices.getUserMedia = async () => { calls++; throw Error('must not open'); };
+  h.navigator.mediaDevices.enumerateDevices = async () => [{ kind: 'audioinput', deviceId: 'test', label: 'Test' }];
+  await h.qa.refreshCaptureDevices();
+  assert.equal(calls, 0); assert.equal(h.recording, false);
+  assert.equal(h.calls.some(call => call.path === '/rooms' && call.options.method === 'POST'), false);
 });

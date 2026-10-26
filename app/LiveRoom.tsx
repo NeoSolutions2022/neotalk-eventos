@@ -10,6 +10,8 @@ import { playbackComplete } from "./playbackCompletion.mjs";
 import { buildPresentationPhrases, PresentationShuffle, PRESENTATION_DISCLOSURE } from "./presentationDeck";
 import { LiveTelemetry } from "./liveTelemetry";
 import { CaptureBacklog } from "./captureBacklog";
+import { acquireCapture, effectiveCapture, needsManagedCapture } from "./captureAudio";
+import type { CaptureProfile, CaptureSelection } from "./captureAudio";
 
 type AvatarId = "lia" | "asuna" | "elia";
 type RemoteBatchStatus = "queued" | "translating" | "done" | "error";
@@ -82,6 +84,13 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const frameRef = useRef<HTMLIFrameElement>(null);
   const sessionScopeRef = useRef(new LiveSessionScope());
   const startingRef = useRef(false);
+  const captureSelectionRef = useRef<CaptureSelection>({ deviceId: "", profile: "standard", compatible: false });
+  const [captureDevice, setCaptureDevice] = useState("");
+  const [captureProfile, setCaptureProfile] = useState<CaptureProfile>("standard");
+  const [captureCompatible, setCaptureCompatible] = useState(false);
+  const [captureDevices, setCaptureDevices] = useState<{ id: string; label: string }[]>([]);
+  const [captureSettings, setCaptureSettings] = useState("");
+  const [captureDeviceNotice, setCaptureDeviceNotice] = useState("");
   const [starting, setStarting] = useState(false);
   const orderedTranscriptsRef = useRef(new OrderedTranscriptBuffer());
   const captureControllerRef = useRef(new AbortController());
@@ -693,11 +702,25 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     scheduleIdleLoop();
   };
 
+  function primaryRendererHidden() {
+    if (document.visibilityState === "hidden") return true;
+    const rect = frameRef.current?.getBoundingClientRect?.();
+    // Chromium may suspend an offscreen iframe while the document stays visible.
+    // Missing geometry is unknown, not permission to waive primary completion.
+    return Boolean(rect && (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0
+      || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth));
+  }
+
+  function externalNativeAccepted() {
+    return Boolean(externalWindowRef.current && !externalWindowRef.current.closed
+      && nativePlaybackRef.current.externalRequired && nativePlaybackRef.current.externalFrame >= 0);
+  }
+
   function finishNativePlayback() {
     const native = nativePlaybackRef.current;
     if (!avatarBusyRef.current) return;
     const externalOpen = Boolean(externalWindowRef.current && !externalWindowRef.current.closed);
-    if (!playbackComplete(native, document.visibilityState === "hidden", externalOpen)) return;
+    if (!playbackComplete(native, primaryRendererHidden(), externalOpen)) return;
     if (playbackTimerRef.current) window.clearTimeout(playbackTimerRef.current);
     playbackTimerRef.current = null;
     if (idleLoopActiveRef.current) finishIdleLoopPhrase();
@@ -741,8 +764,9 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const previousFrame = external ? native.externalFrame : native.primaryFrame;
     if (external) native.externalFrame = packet.frame!;
     else native.primaryFrame = packet.frame!;
-    if (!external && ["started", "progress"].includes(data.status || "")) {
-      avatarPlaybackStartedRef.current = true;
+    if (["started", "progress"].includes(data.status || "")) {
+      if (!external) avatarPlaybackStartedRef.current = true;
+      clearAvatarRetryTimer();
       clearAvatarProcessingTimer();
     }
     if (data.status === "preparing" || packet.frame! > previousFrame) scheduleNativePlaybackWatchdog();
@@ -803,7 +827,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const recoverAcceptedAvatarPhrase = () => {
     clearAvatarProcessingTimer();
-    if (!avatarBusyRef.current || avatarPlaybackStartedRef.current) return;
+    if (!avatarBusyRef.current || avatarPlaybackStartedRef.current || externalNativeAccepted()) return;
     if (avatarCommandAcknowledgedRef.current) {
       recordPoseDiagnostic("principal", { type: "neotalk:processing-delayed" });
       scheduleAvatarProcessingWatchdog("processing");
@@ -1182,7 +1206,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         if (!isCurrentAvatarPhrase(data.phrase)) return;
         const reportedCorrelation = data.correlationId || data.loadId;
         if (reportedCorrelation && expectedPoseCorrelationRef.current && reportedCorrelation !== expectedPoseCorrelationRef.current) return;
-        if (avatarPlaybackStartedRef.current || nativePlaybackRef.current.primaryId) {
+        if (avatarPlaybackStartedRef.current || nativePlaybackRef.current.primaryId || externalNativeAccepted()) {
           // A pose já está animando; erro tardio não deve interromper a fila.
           if (diagnostics) console.warn("Aviso tardio do widget durante reprodução", { code: data.code, traceId: data.traceId });
           return;
@@ -1384,7 +1408,19 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (listeningRef.current && !microphoneMutedRef.current) recoverFallbackCaptureRef.current();
     };
     if (track.label) setMicrophoneName(track.label);
+    setCaptureSettings(effectiveCapture(track));
     fallbackStreamRef.current = stream;
+  };
+
+  const refreshCaptureDevices = async () => {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) throw new Error();
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setCaptureDevices(devices.filter(device => device.kind === "audioinput" && device.deviceId && device.deviceId !== "default")
+        .map((device, index) => ({ id: device.deviceId, label: device.label || `Microfone ${index + 1}` })));
+      setCaptureDeviceNotice(devices.some(device => device.kind === "audioinput" && device.label)
+        ? "" : "Os nomes dos microfones aparecem após autorizar a captura. Você pode iniciar com o padrão e escolher antes da próxima sala.");
+    } catch { setCaptureDeviceNotice("Não foi possível listar os microfones. O dispositivo padrão continua disponível."); }
   };
 
   const recoverFallbackCapture = async () => {
@@ -1393,7 +1429,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const signal = sessionScopeRef.current.signal;
     try {
       stopFallbackCapture(true, false);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await acquireCapture(navigator.mediaDevices, captureSelectionRef.current);
       if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -1538,14 +1574,17 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
     startingRef.current = true;
     setStarting(true);
+    // Freeze the selection for the session, including recovery after device loss.
+    captureSelectionRef.current = { deviceId: captureDevice, profile: captureProfile, compatible: captureCompatible };
+    setCaptureSettings("");
     const signal = sessionScopeRef.current.begin();
     const browserWindow = window as Window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor };
     // Browser speech services can send audio to the cloud. Offline builds must
     // exclusively use their bundled transcription adapter.
-    const SpeechRecognitionApi = offline ? undefined : browserWindow.SpeechRecognition || browserWindow.webkitSpeechRecognition;
+    const SpeechRecognitionApi = offline || needsManagedCapture(captureSelectionRef.current) ? undefined : browserWindow.SpeechRecognition || browserWindow.webkitSpeechRecognition;
     let createdRoomId: string | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await acquireCapture(navigator.mediaDevices, captureSelectionRef.current);
       if (!sessionScopeRef.current.isCurrent(signal)) {
         stream.getTracks().forEach((item) => item.stop());
         return;
@@ -1638,7 +1677,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         try { recognition.abort(); } catch { /* reconhecimento já encerrado */ }
         recognitionRef.current = null;
         try {
-          const compatibleStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const compatibleStream = await acquireCapture(navigator.mediaDevices, captureSelectionRef.current);
           if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) {
             compatibleStream.getTracks().forEach((item) => item.stop());
             return;
@@ -1839,10 +1878,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     };
 
     window.addEventListener("online", restoreLongRunningSession);
+    window.addEventListener("scroll", finishNativePlayback, { passive: true });
+    window.addEventListener("resize", finishNativePlayback);
     document.addEventListener("visibilitychange", restoreLongRunningSession);
     sessionHealthTimerRef.current = window.setInterval(restoreLongRunningSession, 10000);
     return () => {
       window.removeEventListener("online", restoreLongRunningSession);
+      window.removeEventListener("scroll", finishNativePlayback);
+      window.removeEventListener("resize", finishNativePlayback);
       document.removeEventListener("visibilitychange", restoreLongRunningSession);
       if (sessionHealthTimerRef.current) window.clearInterval(sessionHealthTimerRef.current);
       sessionHealthTimerRef.current = null;
@@ -2126,6 +2169,22 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       </section>
       <aside className="studio-panel">
         <div className="panel-tabs"><button className={panelTab === "room" ? "active" : ""} onClick={() => setPanelTab("room")}>Sala</button><button className={panelTab === "captions" ? "active" : ""} onClick={() => setPanelTab("captions")}>Legenda</button></div>
+        {panelTab === "room" && <div className="config-block capture-config">
+          <div className="block-title"><b>Entrada de áudio</b><small>Configure antes de iniciar a sala.</small></div>
+          <label>Microfone<select aria-label="Microfone da sala" value={captureDevice} disabled={recording || starting} onChange={event => setCaptureDevice(event.target.value)}>
+            <option value="">Padrão do navegador</option>{captureDevice && !captureDevices.some(device => device.id === captureDevice) && <option value={captureDevice}>Microfone selecionado (indisponível na lista)</option>}{captureDevices.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
+          </select></label>
+          <button className="secondary" type="button" onClick={() => void refreshCaptureDevices()}>Atualizar microfones</button>
+          {captureDeviceNotice && <small role="status">{captureDeviceNotice}</small>}
+          <label>Perfil de áudio<select aria-label="Perfil de áudio" value={captureProfile} disabled={recording || starting} onChange={event => setCaptureProfile(event.target.value as CaptureProfile)}>
+            <option value="standard">Padrão do navegador</option><option value="lecture">Voz · solicitar filtros de ruído e eco</option><option value="direct">Mesa de som · solicitar filtros desligados</option>
+          </select></label>
+          <label>Transcrição<select aria-label="Modo de captura" value={captureCompatible ? "compatible" : "auto"} disabled={recording || starting || offline} onChange={event => setCaptureCompatible(event.target.value === "compatible")}>
+            <option value="auto">Automática</option><option value="compatible">Compatível · usar o áudio selecionado</option>
+          </select></label>
+          <small>{offline ? "O áudio é entregue ao transcritor local instalado." : captureCompatible || captureDevice || captureProfile !== "standard" ? "O modo compatível usa esta captura no transcritor e pode ter mais atraso." : "No modo automático, o serviço de voz do navegador controla sua própria captura."} Filtros dependem do navegador e não isolam uma pessoa de outras vozes.</small>
+          {diagnostics && recording && captureSettings && <small className="capture-effective">Captura efetiva · {captureSettings}</small>}
+        </div>}
         {diagnostics && !offline && panelTab === "room" && <div className="config-block presentation-config">
           <div className="block-title"><b>Apresentação</b></div>
           <label><select aria-label="Quantidade de sequências da apresentação" value={presentationSize} disabled={presentationMode || recording || starting} onChange={event => setPresentationSize(Number(event.target.value))}><option value={64}>64 sequências</option><option value={40}>40 sequências</option><option value={24}>24 sequências</option></select></label>

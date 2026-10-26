@@ -51,7 +51,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
-  assert.match(liveRoom, /getUserMedia\(\{ audio: true \}\)/);
+  assert.match(liveRoom, /acquireCapture\(navigator\.mediaDevices, captureSelectionRef\.current\)/);
   assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
   assert.match(liveRoom, /className="live-captions"/);
   assert.match(liveRoom, /window\.location\.href = "\/salas"/);

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-10-26 — AUDIO-04 e continuidade fora da tela (candidata)
+
+- Seletor de microfone e perfis Voz/Mesa de som, com stream realmente enviado
+  ao ASR no modo gerenciado. Padrão WebSpeech preservado; hardware explícito
+  não troca silenciosamente. Preferências de filtros não prometem isolamento.
+- Corrigido gate do PiP: principal fora do viewport não bloqueia o último
+  frame externo real; dois renderizadores visíveis ainda exigem os dois fins.
+- Build e 152 testes passaram. Ensaio real de três frases em cada cenário
+  confirmou continuidade fora da tela e conclusão dupla quando visíveis.
+- Captura sintética validou o stream real; ainda há 502 transitório no ASR,
+  sem aprovação acústica ou da matriz completa de navegadores.
+- Documentos AUDIO-04-MANAGED-CAPTURE e PIP-OFFSCREEN detalham evidências e
+  pendências. Trello sem acesso nesta rodada; nenhuma conclusão falsa de card.
+- Sem merge/deploy ou alteração de WebGL nesta subentrega.
+
 ## 2026-10-26 — Transporte do proxy medido com HTTPS real
 
 - Avatar3DFrontend recebe pool próprio; não confundir com o pool anterior

@@ -1,0 +1,87 @@
+{
+  "kind": "managed-capture-browser",
+  "result": "PASS",
+  "limitations": [
+    "Fake browser microphone, not physical device/noise/isolation/clipping/WER QA.",
+    "Real MediaRecorder and backend requests; no simulated HTTP responses or transcript injection."
+  ],
+  "checks": [
+    {
+      "name": "Listing devices does not open microphone",
+      "passed": true
+    },
+    {
+      "name": "One acquired stream is actually recorded across chunks",
+      "passed": true
+    },
+    {
+      "name": "Managed lecture profile bypasses WebSpeech",
+      "passed": true
+    },
+    {
+      "name": "Hardware selection is locked during live capture",
+      "passed": true
+    },
+    {
+      "name": "Mute disables the actual recorded tracks",
+      "passed": true
+    },
+    {
+      "name": "Unmute resumes the same selected stream without reacquisition",
+      "passed": true
+    },
+    {
+      "name": "Ending room releases real browser tracks",
+      "passed": true
+    },
+    {
+      "name": "Nonempty real recorder payload reaches real ASR endpoint",
+      "passed": true
+    },
+    {
+      "name": "Browser enumerates a concrete synthetic microphone after permission",
+      "passed": true
+    },
+    {
+      "name": "Exact selected device is the track recorded in the second session",
+      "passed": true
+    },
+    {
+      "name": "Second session releases the selected hardware too",
+      "passed": true
+    },
+    {
+      "name": "No uncaught main-page exception",
+      "passed": true
+    }
+  ],
+  "asr": [
+    {
+      "status": 502
+    },
+    {
+      "status": 502
+    },
+    {
+      "status": 502
+    },
+    {
+      "status": 200
+    }
+  ],
+  "pageErrors": 0,
+  "platformImage": "sha256:97b0ff658601735327b84afe2dc48078afdd8272d67af36230774e166f835f7f",
+  "sourceSha256": {
+    "app/captureAudio.ts": "0f5361764a2256c499cf93426a90548c5de54a4836accac64c151197b23ed86b",
+    "app/LiveRoom.tsx": "887e7e921deb9f72c24af9e1f29c20690a24aeddef006642372d105d14caf0bd",
+    "tests/capture-browser.cjs": "7954c5dab6f8c70162fb20b275b8853c9f818ca352fc8e30ef3690a9553430e0"
+  },
+  "browser": "155.0.4283.62",
+  "asrPayloadBytes": [
+    46116,
+    110,
+    110,
+    110,
+    51494
+  ]
+}
