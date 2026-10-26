@@ -62,6 +62,7 @@ Registro abaixo é a atualização pronta para transcrever, não um estado do ca
 - [ ] Investigar falhas ASR e chunks curtos em mute/desmute.
 - [ ] Aceite prolongado e revisão antes de merge/deploy.
 
-O card completo permanece em andamento; não mover para concluído apenas pelos
-testes do componente. O ensaio encontrou ainda uma falha independente de
+O escopo completo do card permanece incompleto; não mover para concluído apenas
+pelos testes do componente. Isso não afirma nem altera a coluna atual no Trello.
+O ensaio encontrou ainda uma falha independente de
 conclusão do mini-player: [diagnóstico](PIP-OFFSCREEN-2026-10-26.md).
