@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-26 — Fronteira do gravador e 502 indevidos (candidata)
+
+- Reproduzida e corrigida corrida em que `onstop` antigo apagava o timer do
+  gravador novo após mute/desmute rápido; cauda aceita preservada.
+- Reconhecido o cabeçalho WebM sem mídia emitido nesse limite: resposta explícita
+  `empty_container`, sem consulta/retry no provedor ou alerta falso.
+- Rejeição permanente de arquivo não é mais rotulada como 502 transitório;
+  erros reais continuam visíveis e retentativas transitórias foram preservadas.
+- Build/156 testes Node e 52 Python passaram. Captura com ASR real passou em
+  14 verificações, sem 502 nesse cenário. Não é garantia geral nem soak físico.
+- Diagnóstico e evidências em docs/AUDIO-BOUNDARY-2026-10-26.md.
+
 ## 2026-10-26 — AUDIO-04 e continuidade fora da tela (candidata)
 
 - Seletor de microfone e perfis Voz/Mesa de som, com stream realmente enviado

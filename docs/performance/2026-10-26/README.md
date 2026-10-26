@@ -15,6 +15,15 @@ e [PiP com principal fora da tela](../../PIP-OFFSCREEN-2026-10-26.md).
 sem transformar a ausência de frames do principal suspenso em uma medição zero.
 Trello não foi atualizado nessa rodada por indisponibilidade de acesso.
 
+Atualização seguinte: [fronteira do gravador e 502 indevidos](../../AUDIO-BOUNDARY-2026-10-26.md),
+com reprodução da rejeição 400 do cabeçalho sem mídia e correção da corrida de
+timer. 156 testes Node/build, 52 Python e 14 verificações de captura passaram.
+O cenário de captura corrigido distingue `empty_container` de sucesso do ASR.
+Depois da restauração do acesso ao Brave, AUDIO-04 e QA-07 foram atualizados:
+ambos Em andamento, critérios amplos pendentes e subchecklists locais separados.
+O relato anterior de indisponibilidade descreve a tentativa anterior, não o
+estado atual do acesso.
+
 ## Implementação no repositório correto
 
 Correção do widget em [Avatar3DFrontend, PR #40](https://github.com/NeoSolutions2022/Avatar3DFrontend/pull/40):

@@ -1,0 +1,95 @@
+{
+  "kind": "managed-capture-browser",
+  "result": "PASS",
+  "limitations": [
+    "Fake browser microphone, not physical device/noise/isolation/clipping/WER QA.",
+    "Real MediaRecorder and backend requests; no simulated HTTP responses or transcript injection."
+  ],
+  "checks": [
+    {
+      "name": "Known no-media recorder header returns explicit empty-container result",
+      "passed": true
+    },
+    {
+      "name": "Listing devices does not open microphone",
+      "passed": true
+    },
+    {
+      "name": "One acquired stream is actually recorded across chunks",
+      "passed": true
+    },
+    {
+      "name": "Managed lecture profile bypasses WebSpeech",
+      "passed": true
+    },
+    {
+      "name": "Hardware selection is locked during live capture",
+      "passed": true
+    },
+    {
+      "name": "Mute disables the actual recorded tracks",
+      "passed": true
+    },
+    {
+      "name": "Unmute resumes the same selected stream without reacquisition",
+      "passed": true
+    },
+    {
+      "name": "Ending room releases real browser tracks",
+      "passed": true
+    },
+    {
+      "name": "Real recorder media reaches ASR; empty-container response is not provider success",
+      "passed": true
+    },
+    {
+      "name": "No failed ASR response during this capture scenario",
+      "passed": true
+    },
+    {
+      "name": "Browser enumerates a concrete synthetic microphone after permission",
+      "passed": true
+    },
+    {
+      "name": "Exact selected device is the track recorded in the second session",
+      "passed": true
+    },
+    {
+      "name": "Second session releases the selected hardware too",
+      "passed": true
+    },
+    {
+      "name": "No uncaught main-page exception",
+      "passed": true
+    }
+  ],
+  "asr": [
+    {
+      "status": 200,
+      "skipped": "empty_container"
+    },
+    {
+      "status": 200
+    }
+  ],
+  "pageErrors": 0,
+  "platformImage": "sha256:6eba1bb4ddb2c08f4c4adfdc5c8a1d5317e22bb5f212123f4aad8ec6f40535b1",
+  "apiImage": "sha256:1079556de6866e294e8617ed1206f4e18a910d8d01e9fe87ee149e8c3028911b",
+  "sourceSha256": {
+    "app/captureAudio.ts": "0f5361764a2256c499cf93426a90548c5de54a4836accac64c151197b23ed86b",
+    "app/LiveRoom.tsx": "9afe7299da3f604aa0e42323aee819137dc92fab418fcc564ded046389d8e182",
+    "backend/app/audio_input.py": "265943c2baafd18c081a8c35b97a7093b4963904aaf3b35ae81ddbe300bfebab",
+    "backend/app/main.py": "5ed79254fa467a8ba2c66369ab13ad88d2312b8931b11d4a0f51a5116f4093e5",
+    "backend/app/services.py": "87ccbdec5a4c4a9266331b3a1c0934bc34f811d412407379d66acc0b25b7e72b",
+    "tests/capture-browser.cjs": "76589fb392627b9385cddc96da74175d1757c946de35cfc5c7a189c725b4a9e9"
+  },
+  "browser": "155.0.4283.62",
+  "emptyContainerControl": {
+    "status": 200,
+    "skipped": "empty_container"
+  },
+  "asrPayloadBytes": [
+    50623,
+    110
+  ]
+}

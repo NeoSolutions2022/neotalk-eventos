@@ -49,7 +49,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
   }
   // Test-only exposure: no debug API is included in shipped component source.
   const exposed = ['presentationRef', 'preparePresentationPlayers', 'togglePresentationMode', 'warmPresentationLibrary', 'playPresentationPhrase', 'notePresentationSpeech', 'finishIdleLoopPhrase', 'currentAvatarPhrase', 'externalRoomButtonRef', 'externalCloseStopsRoomRef', 'handleExternalPlayerClosed', 'nativePlaybackRef', 'avatarSupportsNativePlaybackRef', 'externalSupportsNativePlaybackRef', 'handleNativePlaybackFrame', 'finishNativePlayback', 'startLiveRoom', 'stopLiveRoom', 'enqueueBatch', 'completeActiveBatch', 'runHeartbeat', 'sendToAvatar', 'playIdleLoopPhrase', 'queueFallbackTranscription', 'startFallbackChunk', 'fallbackStreamRef', 'fallbackTranscriptionQueueRef', 'fallbackTranscriptionInFlightRef',
-    'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
+    'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef', 'fallbackRecorderRef', 'fallbackChunkTimerRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
     'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
   const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, captureSelectionRef, setCaptureDevice, setCaptureProfile, setCaptureCompatible, refreshCaptureDevices, telemetryRef, prefetchedPosesRef, dispatchNextBatch, manualMuteRef, transcriptBacklogRef, audioBacklogRef, drainTranscriptBacklog, recoverFallbackCaptureRef, presentationError };\n  return <>`);
@@ -181,6 +181,28 @@ test('manual mute does not cancel already accepted compatible transcriptions', a
  const request=h.calls.find(c=>c.path==='/agent/transcribe');assert.equal(request.options.signal.aborted,false);
  held.resolve({text:'texto ja capturado'});await flush();h.qa.flushWordBuffer(true);await flush();
  assert.equal(h.qa.microphoneMutedRef.current,true);assert.equal(h.qa.activeBatchRef.current.text,'texto ja capturado');h.qa.stopLiveRoom();
+});
+
+test('known empty recorder containers release ordered ASR slots without false provider success or warning', async () => {
+ let calls=0;
+ const h=harness(async p=>p==='/agent/transcribe'?(++calls===1?{text:'',skipped:'empty_container'}:{text:'fala posterior'}):p==='/agent/translate'?{gloss_text:'TESTE'}:{id:'qa'},{diagnostics:true});
+ await h.qa.startLiveRoom();
+ const noticesBefore=h.toasts.length;
+ h.qa.queueFallbackTranscription(new Blob(['empty header']),0);h.qa.queueFallbackTranscription(new Blob(['real media']),0);await flush();
+ h.qa.flushWordBuffer(true);await flush();
+ assert.equal(calls,2);assert.equal(h.qa.activeBatchRef.current.text,'fala posterior');
+ const telemetry=h.qa.telemetryRef.current.snapshot();
+ assert.equal(telemetry.emptyAudioChunks,1);assert.equal(telemetry.asr_request_ms.count,1);
+ assert.equal(telemetry.asrFailures,0);assert.equal(h.toasts.length,noticesBefore);
+ assert.equal(h.qa.listeningRef.current,true);h.qa.stopLiveRoom();
+});
+
+test('permanent audio-file rejection is not retried and never pauses the microphone', async () => {
+ let calls=0;let h;
+ h=harness(async p=>{if(p==='/agent/transcribe'){calls++;throw new h.ApiError(422,'Áudio inválido');}return{id:'qa'};});
+ await h.qa.startLiveRoom();h.qa.queueFallbackTranscription(new Blob(['invalid media']),0);await flush();
+ assert.equal(calls,1);assert.equal(h.qa.listeningRef.current,true);
+ assert.ok(h.toasts.some(text=>text.includes('não pôde ser transcrito')),'real failure remains visible to the operator');h.qa.stopLiveRoom();
 });
 
 test('a failed accepted ASR slot warns the operator once and releases later speech without muting', async () => {
@@ -781,6 +803,27 @@ test('selected microphone uses the same managed stream for recording even when W
   assert.equal(requests[0].audio.noiseSuppression.ideal, true);
   assert.notEqual(h.track.stopped, true);
   h.qa.stopLiveRoom(); assert.equal(h.track.stopped, true);
+});
+
+test('delayed stop callback after rapid mute/unmute preserves the new recorder timer and the old audio tail', async () => {
+  const h = harness(async path => path === '/agent/transcribe' ? {text:'cauda aceita'} : {id:'qa'});
+  const recorders=[]; h.track.readyState='live';
+  h.context.MediaRecorder=class {
+    static isTypeSupported(){return true;}
+    constructor(){this.state='inactive';this.mimeType='audio/webm';recorders.push(this);}
+    start(){this.state='recording';}
+    stop(){this.state='inactive';} // Real browsers deliver data/stop asynchronously.
+  };
+  h.qa.setCaptureCompatible(true);h.render();await h.context.qa.startLiveRoom();h.render();
+  const old=recorders[0];h.context.qa.toggleMicrophone();h.context.qa.toggleMicrophone();
+  const current=recorders[1],timer=h.qa.fallbackChunkTimerRef.current;
+  assert.ok(timer&&h.timers.has(timer));assert.equal(current.state,'recording');
+  old.ondataavailable({data:new Blob(['previous accepted speech tail'])});old.onstop();await flush();
+  assert.equal(h.qa.fallbackRecorderRef.current,current);
+  assert.equal(h.qa.fallbackChunkTimerRef.current,timer,'old stop callback must not clear the current recorder timer');
+  assert.ok(h.timers.has(timer),'new chunk must still have a stop deadline');
+  assert.equal(h.calls.filter(call=>call.path==='/agent/transcribe').length,1,'old real tail is not silently discarded');
+  h.timers.get(timer).fn();assert.equal(current.state,'inactive');h.qa.stopLiveRoom();
 });
 
 test('compatible capture recovery retains frozen device/profile instead of switching to default', async () => {

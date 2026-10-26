@@ -9,6 +9,12 @@ vm.runInContext(ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKin
 const {LiveTelemetry,summarize} = context.exports;
 const plain = value => JSON.parse(JSON.stringify(value));
 function fixture(capacity) {let time=0;const t=new LiveTelemetry(()=>time,capacity);t.begin('qa');return {t,at:n=>{time=n;}};}
+
+test('empty containers are counted separately, never provider latency/success samples',()=>{
+ const {t}=fixture();t.emptyAudio();t.emptyAudio();t.transcription(100,true);
+ assert.equal(t.snapshot().emptyAudioChunks,2);assert.equal(t.snapshot().asr_request_ms.count,1);
+ assert.equal(t.snapshot().asrFailures,0);t.begin('next');assert.equal(t.snapshot().emptyAudioChunks,0);
+});
 test('missing measurements are null, not zero or invented animation',()=>{
   const {t}=fixture();t.admit(1,1);t.frame(1,'primary','x','finished',9,10);
   const s=t.snapshot();assert.equal(s.metrics.dispatch_to_first_frame_ms.mean,null);assert.equal(s.missing.firstFrame,1);

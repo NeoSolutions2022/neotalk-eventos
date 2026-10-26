@@ -1288,13 +1288,16 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       };
       fallbackTranscriptionInFlightRef.current += 1;
       const asrStarted = performance.now();
-      void retryLiveRequest(() => apiRequest<{ text: string }>("/agent/transcribe", {
+      void retryLiveRequest(() => apiRequest<{ text: string; skipped?: string }>("/agent/transcribe", {
         method: "POST",
         signal,
         headers: { "Content-Type": blob.type.split(";", 1)[0] },
         body: blob,
-      }), signal).then(({ text }) => {
-        if (diagnostics && !signal.aborted) telemetryRef.current.transcription(performance.now() - asrStarted, true);
+      }), signal).then(({ text, skipped }) => {
+        if (diagnostics && !signal.aborted) {
+          if (skipped === "empty_container") telemetryRef.current.emptyAudio();
+          else telemetryRef.current.transcription(performance.now() - asrStarted, true);
+        }
         deliver(text || "");
       }).catch(() => {
         if (diagnostics && !signal.aborted) telemetryRef.current.transcription(performance.now() - asrStarted, false);
@@ -1351,11 +1354,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
     recorder.onstop = () => {
       if (generation !== fallbackCaptureGenerationRef.current) return;
-      clearFallbackChunkTimer();
-      if (fallbackRecorderRef.current === recorder) fallbackRecorderRef.current = null;
+      const ownsCapture = fallbackRecorderRef.current === recorder;
+      if (ownsCapture) {
+        clearFallbackChunkTimer();
+        fallbackRecorderRef.current = null;
+      }
       if (generation !== fallbackCaptureGenerationRef.current) return;
       const shouldProcess = listeningRef.current;
-      if (shouldProcess && !microphoneMutedRef.current && track.readyState === "live") window.setTimeout(startFallbackChunk, 30);
+      if (ownsCapture && shouldProcess && !microphoneMutedRef.current && track.readyState === "live") window.setTimeout(startFallbackChunk, 30);
       if (!shouldProcess || !chunks.length) return;
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
       queueFallbackTranscription(blob, generation);

@@ -89,8 +89,21 @@ async def transcribe_audio(content: bytes, content_type: str) -> str:
                 files={"file": (f"trecho.{extension}", content, content_type)},
             )
         if response.status_code >= 400:
+            if response.status_code in {400, 422}:
+                try:
+                    payload = response.json()
+                    error = payload.get("error") if isinstance(payload, dict) else None
+                except ValueError:
+                    error = None
+                if isinstance(error, dict) and error.get("param") == "file":
+                    # A rejected file will not become valid by uploading it again.
+                    # Do not expose the provider's free-form response to users/logs.
+                    raise HTTPException(status_code=422, detail="O trecho de áudio não pôde ser decodificado.")
             raise HTTPException(status_code=502, detail="Não foi possível transcrever este trecho.")
-        text = str(response.json().get("text", "")).strip()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+            raise HTTPException(status_code=502, detail="O serviço de transcrição retornou uma resposta inválida.")
+        text = payload["text"].strip()
         return " ".join(text.split())
     except HTTPException:
         raise

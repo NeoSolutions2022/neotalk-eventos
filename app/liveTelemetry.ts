@@ -35,6 +35,7 @@ export class LiveTelemetry {
   private inputRejected = 0;
   private blockedAdmissions = 0;
   private rejectedAudioChunks = 0;
+  private emptyAudioChunks = 0;
   constructor(private now:()=>number = ()=>performance.now(), private capacity=512) {
     if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError('capacity must be a positive integer');
   }
@@ -42,7 +43,7 @@ export class LiveTelemetry {
     this.session = /^[a-zA-Z0-9_-]{1,80}$/.test(session) ? session : 'local';
     this.rows.clear(); this.poseFetchOwners.clear(); this.evicted=0; this.pressureCount=0; this.resumeCount=0; this.maxQueue=0;this.sequence=0;
     this.previous={};this.gaps=[];this.asr=[];this.firstInput=null;this.lastInput=null;
-    this.sourceWords=0;this.resetCount=0;this.inputRejected=0;this.blockedAdmissions=0;this.rejectedAudioChunks=0;
+    this.sourceWords=0;this.resetCount=0;this.inputRejected=0;this.blockedAdmissions=0;this.rejectedAudioChunks=0;this.emptyAudioChunks=0;
   }
   admit(id:number, queue:number) {
     if (!this.session) return;
@@ -82,6 +83,7 @@ export class LiveTelemetry {
   resumed(){if(this.session)this.resumeCount++;}
   blocked(){if(this.session)this.blockedAdmissions++;}
   rejectAudio(){if(this.session)this.rejectedAudioChunks++;}
+  emptyAudio(){if(this.session)this.emptyAudioChunks++;}
   reset(){if(this.session)this.resetCount++;}
   rejected(words:number){if(this.session)this.inputRejected+=Math.max(0,words);}
   input(words:number){if(!this.session)return;const at=this.now();this.firstInput??=at;this.lastInput=at;this.sourceWords+=words;}
@@ -121,7 +123,7 @@ export class LiveTelemetry {
         notReady:summarize(this.gaps.filter(g=>g.output===output&&g.nextTranslationReady===false).map(g=>g.ms)),
         unreported:summarize(this.gaps.filter(g=>g.output===output&&g.nextTranslationReady===undefined).map(g=>g.ms)),
       }])),
-      asr_request_ms:summarize(this.asr.map(s=>s.ms)),asrFailures:this.asr.filter(s=>!s.ok).length,
+      asr_request_ms:summarize(this.asr.map(s=>s.ms)),asrFailures:this.asr.filter(s=>!s.ok).length,emptyAudioChunks:this.emptyAudioChunks,
       pressure:{capturePauses:this.pressureCount,automaticResumes:this.resumeCount,maxPendingBatches:this.maxQueue,rejectedSourceWords:this.inputRejected,blockedAdmissionAttempts:this.blockedAdmissions,rejectedAudioChunks:this.rejectedAudioChunks,
         oldestPendingMs:Math.max(0,...rows.filter(r=>!r.outcome).map(r=>at-r.points.admitted!))},
       input:{sourceWords:this.sourceWords,observedDurationMs:this.firstInput===null?null:this.lastInput!-this.firstInput},runtimeResets:this.resetCount,

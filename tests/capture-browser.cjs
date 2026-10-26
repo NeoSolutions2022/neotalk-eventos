@@ -18,8 +18,9 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
   await fs.mkdir(output, { recursive: true });
   try {
     report.platformImage = execFileSync('docker', ['inspect', '--format', '{{.Image}}', 'neotalk-homolog-observability-platform-1'], { encoding: 'utf8', timeout: 10000 }).trim();
+    report.apiImage = execFileSync('docker', ['inspect', '--format', '{{.Image}}', 'neotalk-homolog-observability-api-1'], { encoding: 'utf8', timeout: 10000 }).trim();
     report.sourceSha256 = {};
-    for (const file of ['app/captureAudio.ts', 'app/LiveRoom.tsx', 'tests/capture-browser.cjs']) {
+    for (const file of ['app/captureAudio.ts', 'app/LiveRoom.tsx', 'backend/app/audio_input.py', 'backend/app/main.py', 'backend/app/services.py', 'tests/capture-browser.cjs']) {
       report.sourceSha256[file] = crypto.createHash('sha256').update(await fs.readFile(path.join(root, file))).digest('hex');
     }
     const configuration = await fs.readFile(path.join(root, '.env.homolog.local'), 'utf8');
@@ -31,6 +32,14 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
     context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
     const login = await context.request.post(base + '/api/v1/auth/login', { headers: { Origin: base }, data: { email: 'qa@homolog.invalid', password } });
     assert.ok(login.ok()); csrf = (await login.json()).csrf_token;
+    // Actual synthetic Chromium no-media output, not a size/silence heuristic.
+    const header = Buffer.from('1a45dfa39f4286810142f7810142f2810442f381084282847765626d4287810442858102','hex');
+    const emptyResponse = await context.request.post(base + '/api/v1/agent/transcribe', {
+      headers: { Origin:base,'X-CSRF-Token':csrf,'Content-Type':'audio/webm' },data:Buffer.concat([header,Buffer.alloc(74)]),
+    });
+    const emptyResult = await emptyResponse.json();
+    report.emptyContainerControl={status:emptyResponse.status(),skipped:emptyResult.skipped};
+    check(emptyResponse.ok() && emptyResult.text === '' && emptyResult.skipped === 'empty_container', 'Known no-media recorder header returns explicit empty-container result');
     await context.request.patch(base + '/api/v1/auth/onboarding', { headers: { Origin: base, 'X-CSRF-Token': csrf }, data: { step: 5, status: 'completed' } });
     await context.addInitScript(() => {
       window.__captureQA = { acquired: 0, recorderCount: 0, sameStream: true, speechStarts: 0, requestedLecture: false, asrBytes: [], exactDevice: false };
@@ -68,7 +77,10 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
       const request = response.request(), url = new URL(response.url());
       if (url.origin !== base) return;
       if (url.pathname === '/api/v1/rooms' && request.method() === 'POST' && response.ok()) room = (await response.json()).id;
-      if (url.pathname === '/api/v1/agent/transcribe') report.asr.push({ status: response.status() });
+      if (url.pathname === '/api/v1/agent/transcribe') {
+        const payload = response.ok() ? await response.json().catch(() => ({})) : {};
+        report.asr.push({ status: response.status(), skipped: payload.skipped === 'empty_container' ? 'empty_container' : undefined });
+      }
     });
     await page.goto(base + '/salas/ao-vivo');
     await page.getByRole('combobox', { name: 'Perfil de áudio', exact: true }).selectOption('lecture');
@@ -89,14 +101,16 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
     check(await page.evaluate(() => window.__captureQA.acquired === 1 && window.__captureQA.sameStream && window.__captureQA.stream.getAudioTracks().every(track => track.enabled)), 'Unmute resumes the same selected stream without reacquisition');
     // The real ASR response can arrive well after the recorder's next chunk.
     // Do not end/abort the room before observing the endpoint response.
-    if (!report.asr.some(call => call.status === 200)) {
-      await page.waitForResponse(response => response.url() === base + '/api/v1/agent/transcribe' && response.status() === 200, { timeout: 45000 });
+    if (!report.asr.some(call => call.status === 200 && !call.skipped)) {
+      await page.waitForResponse(async response => response.url() === base + '/api/v1/agent/transcribe' && response.status() === 200
+        && !(await response.json()).skipped, { timeout: 45000 });
     }
     report.asrPayloadBytes = await page.evaluate(() => window.__captureQA.asrBytes);
     await page.getByRole('button', { name: 'Encerrar sala', exact: true }).click();
     await page.getByRole('button', { name: 'Iniciar sala ao vivo', exact: true }).waitFor();
     check(await page.evaluate(() => window.__captureQA.stream.getTracks().every(track => track.readyState === 'ended')), 'Ending room releases real browser tracks');
-    check(report.asrPayloadBytes.some(bytes => bytes > 0) && report.asr.some(call => call.status === 200), 'Nonempty real recorder payload reaches real ASR endpoint');
+    check(report.asrPayloadBytes.some(bytes => bytes > 0) && report.asr.some(call => call.status === 200 && !call.skipped), 'Real recorder media reaches ASR; empty-container response is not provider success');
+    check(report.asr.every(call => call.status < 400), 'No failed ASR response during this capture scenario');
     await page.getByRole('button', { name: 'Atualizar microfones', exact: true }).click();
     const selected = await page.getByRole('combobox', { name: 'Microfone da sala', exact: true }).locator('option').evaluateAll(options => options.map(option => option.value).find(value => value && value !== 'communications'));
     check(Boolean(selected), 'Browser enumerates a concrete synthetic microphone after permission');

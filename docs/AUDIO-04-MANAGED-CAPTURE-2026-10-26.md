@@ -36,8 +36,10 @@ As **12 verificações passaram**: listagem sem captura, identidade do stream,
 desvio correto do WebSpeech, seleção exata, mute/desmute, ASR real e liberação.
 Evidência sanitizada: [capture-browser.json](performance/2026-10-26/audio-capture/capture-browser.json).
 
-Na repetição final, o ASR retornou **três 502 antes de 200**. Isso continua sendo uma falha transitória,
-não um teste de confiabilidade perfeita. Foram observados chunks de 110 bytes
+Naquela repetição, o backend retornou **três 502 antes de 200**, inicialmente
+tratados como falha transitória. A investigação posterior identificou uma
+rejeição 400 do arquivo sem mídia no provedor; veja a correção e a nova rodada
+em [AUDIO-BOUNDARY](AUDIO-BOUNDARY-2026-10-26.md). Foram observados chunks de 110 bytes
 após mute/desmute rápido; a associação causal com cada 502 não foi estabelecida.
 O teste não mede qualidade acústica, WER, clipping nem supressão de interlocutor.
 Ensaios intermediários também não foram apagados dos outputs privados.
@@ -48,9 +50,12 @@ atestam ausência de falhas do provedor de ASR.
 
 ## Checklist para o Trello
 
-Card: [AUDIO-04](https://trello.com/c/cZVdlsgg). **Não atualizado nesta rodada**:
-o conector estava em conta sem acesso e o navegador local desabilitado no Work.
-Registro abaixo é a atualização pronta para transcrever, não um estado do card.
+Card: [AUDIO-04](https://trello.com/c/cZVdlsgg). A primeira tentativa de atualizar
+foi bloqueada: conector em conta sem acesso e navegador local desabilitado.
+Após restauração do acesso ao Brave, o card foi movido para Em andamento, com
+o critério do stream marcado e comentários contendo escopo/evidências/limites.
+O registro abaixo detalha as subentregas técnicas; não equivale ao checklist
+geral do card inteiro nem a uma aprovação de todos os seus critérios.
 
 - [x] Seleção explícita e recuperação sem trocar hardware silenciosamente.
 - [x] Perfis configuram o stream realmente enviado ao ASR no modo gerenciado.
@@ -59,7 +64,8 @@ Registro abaixo é a atualização pronta para transcrever, não um estado do ca
 - [ ] Comparação acústica com microfone físico e fonte concorrente controlada.
 - [ ] Comparar WER, clipping e latência com/sem filtros; não prometer isolamento.
 - [ ] Chrome/Edge/Brave/Safari/iPad reais, permissões, Bluetooth e desconexão.
-- [ ] Investigar falhas ASR e chunks curtos em mute/desmute.
+- [x] Reproduzir/corrigir o cabeçalho sem mídia e a corrida de timer em mute/desmute.
+- [ ] Validar falhas ASR restantes e continuidade prolongada com áudio físico.
 - [ ] Aceite prolongado e revisão antes de merge/deploy.
 
 O escopo completo do card permanece incompleto; não mover para concluído apenas

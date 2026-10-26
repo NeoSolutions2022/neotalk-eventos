@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import expire_stale_rooms, get_pool, lifespan
 from .dataset_pdf import build_dataset_pdf
+from .audio_input import is_empty_browser_webm
 from .auth import (
     COOKIE_NAME, CurrentUser, admin_csrf, admin_user, create_session, csrf_user,
     current_user, enforce_rate_limit, hash_password, normalize_email, normalize_phone,
@@ -428,6 +429,8 @@ async def agent_transcribe(request: Request, _: CurrentUser = Depends(csrf_user)
     content = await request.body()
     if len(content) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Trecho de áudio muito grande.")
+    if is_empty_browser_webm(content, content_type):
+        return {"text": "", "skipped": "empty_container"}
     return {"text": await transcribe_audio(content, content_type)}
 
 
