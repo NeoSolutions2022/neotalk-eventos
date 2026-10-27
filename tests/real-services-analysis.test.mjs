@@ -76,4 +76,61 @@ test('native ACK timing is not mistaken for a first frame or paired across outpu
   assert.equal(result.nativeObservedIntervals.primary.ackToFirstFrameMs.mean,10);
   assert.equal(result.nativeObservedIntervals.primary.preparingToFirstFrameMs.mean,8);
   assert.equal(result.nativeObservedIntervals.external.ackToFirstFrameMs.count,0);
+  assert.equal(result.nativeObservedIntervals.primary.frameAdvancePerSecond.mean,400);
+});
+
+test('handoff separates translation-ready, pending and absent input using raw next-batch points', () => {
+  const [latency, ledger] = fixture(); const rows = latency.telemetry.batches;
+  for (const [index, admitted, ready, first, last] of [[2, 5, 19, 23, 30], [3, 25, 35, 40, 50], [4, 55, 58, 60, 70], [5, 65, null, 80, 90]]) {
+    rows.push({ traceId: `synthetic_${index}`, outcome: 'complete', points: { admitted, translation_ready: ready },
+      executions: [{ output: 'primary', first, last }] });
+  }
+  latency.telemetry.handoff_by_translation_readiness = { primary: { ready: { mean: 999999 } } };
+  const result = analyzeRealServices(latency, ledger, 1).handoffSegmentsMs.primary;
+  assert.equal(result.translationReady.mean, 3); assert.equal(result.translationPending.mean, 10);
+  assert.equal(result.inputNotAdmitted.mean, 10); assert.equal(result.unknown.mean, 10);
+  assert.equal(result.repeatedExecutionTransitions, 0); assert.equal(result.overlappingTransitions, 0);
+});
+
+test('handoff segmentation reports repeats and overlaps without manufacturing zero gaps or cross-output readiness', () => {
+  const [latency, ledger] = fixture(); const rows = latency.telemetry.batches;
+  rows[0].executions.push({ output: 'primary', first: 22, last: 35 });
+  rows.push({ traceId: 'synthetic_2', points: { admitted: 5, translation_ready: 24 },
+    executions: [{ output: 'primary', first: 30, last: 40 }, { output: 'external', first: 45, last: 50 }] });
+  const result = analyzeRealServices(latency, ledger, 1).handoffSegmentsMs;
+  assert.equal(result.primary.repeatedExecutionTransitions, 1); assert.equal(result.primary.overlappingTransitions, 1);
+  assert.equal(result.primary.translationReady.count, 0);
+  assert.equal(result.external.translationPending.mean, 24);
+});
+
+test('dual-output barrier identifies the trailing callback without pairing different batches', () => {
+  const [latency, ledger] = fixture(); const first = latency.telemetry.batches[0];
+  const second = structuredClone(first); second.traceId = 'synthetic_2';
+  second.executions = [{ output: 'primary', first: 30, last: 60 }, { output: 'external', first: 35, last: 40 }];
+  const incomplete = structuredClone(first); incomplete.traceId = 'synthetic_3'; incomplete.executions = [{ output: 'external', first: 70, last: 80 }];
+  latency.telemetry.batches.push(second, incomplete);
+  const result = analyzeRealServices(latency, ledger, 1).outputBarrier;
+  assert.equal(result.pairedBatches, 2); assert.equal(result.firstCallbackSkewMs.max, 5);
+  assert.equal(result.primaryTrailingMs.mean, 20); assert.equal(result.externalTrailingMs.mean, 1);
+});
+
+test('repeated executions are ambiguous for barrier pairing and primary-only runs have no dual-output metric', () => {
+  const [latency, ledger] = fixture(); latency.telemetry.batches[0].executions.push({ output: 'primary', first: 22, last: 30 });
+  let result = analyzeRealServices(latency, ledger, 1).outputBarrier;
+  assert.equal(result.ambiguousBatches, 1); assert.equal(result.pairedBatches, 0);
+  assert.equal(result.primaryTrailingMs.mean, null); assert.equal(result.externalTrailingMs.mean, null);
+  ledger.configuration.output = 'primary';
+  assert.equal(analyzeRealServices(latency, ledger, 1).outputBarrier, null);
+});
+
+test('pose frame-index advance is neither GPU FPS nor inferred from missing or inconsistent callbacks', () => {
+  const [latency, ledger] = fixture(); ledger.observations = [
+    {type:'neotalk:playback-frame',output:'primary',loadId:'normal',status:'started',frame:0,frameCount:121,at:1000},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'normal',status:'finished',frame:120,frameCount:121,at:11000},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'no-first',status:'finished',frame:120,frameCount:121,at:12000},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'changed',status:'started',frame:0,frameCount:121,at:13000},
+    {type:'neotalk:playback-frame',output:'primary',loadId:'changed',status:'finished',frame:240,frameCount:241,at:23000},
+  ];
+  const metric = analyzeRealServices(latency, ledger, 1).nativeObservedIntervals.primary.frameAdvancePerSecond;
+  assert.equal(metric.count, 1); assert.equal(metric.mean, 12);
 });

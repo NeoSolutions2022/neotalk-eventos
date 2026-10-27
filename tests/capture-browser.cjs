@@ -8,11 +8,22 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), base = 'http://localhost:3310';
 const output = path.join(root, 'outputs', 'capture-managed-' + Date.now());
+const muteCycles = Number(process.env.QA_CAPTURE_MUTE_CYCLES || 1);
+if (!Number.isInteger(muteCycles) || muteCycles < 1 || muteCycles > 100) throw new Error('Invalid bounded mute cycle count');
+const renderer = process.env.QA_CAPTURE_RENDERER || 'real';
+if (!['real', 'omit'].includes(renderer)) throw new Error('Invalid capture renderer configuration');
+const browserName = process.env.QA_CAPTURE_BROWSER || 'edge';
+if (!['edge', 'brave'].includes(browserName)) throw new Error('Invalid capture browser configuration');
 let browser, room, context, csrf;
 const report = { kind: 'managed-capture-browser', result: 'RUNNING',
   limitations: ['Fake browser microphone, not physical device/noise/isolation/clipping/WER QA.',
     'Real MediaRecorder and backend requests; no simulated HTTP responses or transcript injection.'],
   checks: [], asr: [], pageErrors: 0 };
+report.muteStress = { requested: muteCycles, completed: 0, timerResumed: false };
+report.renderer = renderer;
+report.browserName = browserName;
+report.browserScope = 'isolated headless temporary profile; synthetic microphone; user browser/profile untouched';
+if (renderer === 'omit') report.limitations.push('Avatar requests blocked to isolate audio capture resources; no rendering/signaling claim from this capture run.');
 function check(value, name) { report.checks.push({ name, passed: !!value }); assert.ok(value, name); }
 (async () => {
   await fs.mkdir(output, { recursive: true });
@@ -26,10 +37,14 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
     const configuration = await fs.readFile(path.join(root, '.env.homolog.local'), 'utf8');
     const password = configuration.match(/^HOMOLOG_ADMIN_PASSWORD=(.+)$/m)?.[1].trim();
     assert.ok(password);
-    browser = await chromium.launch({ channel: 'msedge', headless: true,
+    browser = await chromium.launch({ ...(browserName === 'brave'
+      ? { executablePath: 'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe' } : { channel: 'msedge' }), headless: true,
       args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--enable-unsafe-swiftshader'] });
     report.browser = browser.version();
     context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
+    // Optional audio-only isolation. Never replace ASR/platform requests or
+    // pretend an omitted Unity renderer passed playback checks.
+    if (renderer === 'omit') await context.route('http://localhost:38080/**', route => route.abort('blockedbyclient'));
     const login = await context.request.post(base + '/api/v1/auth/login', { headers: { Origin: base }, data: { email: 'qa@homolog.invalid', password } });
     assert.ok(login.ok()); csrf = (await login.json()).csrf_token;
     // Actual synthetic Chromium no-media output, not a size/silence heuristic.
@@ -42,6 +57,9 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
     check(emptyResponse.ok() && emptyResult.text === '' && emptyResult.skipped === 'empty_container', 'Known no-media recorder header returns explicit empty-container result');
     await context.request.patch(base + '/api/v1/auth/onboarding', { headers: { Origin: base, 'X-CSRF-Token': csrf }, data: { step: 5, status: 'completed' } });
     await context.addInitScript(() => {
+      // Capture belongs to the platform window, never widget/error iframes.
+      // An intentionally blocked iframe has an opaque origin/media API absent.
+      if (window.top !== window) return;
       window.__captureQA = { acquired: 0, recorderCount: 0, sameStream: true, speechStarts: 0, requestedLecture: false, asrBytes: [], exactDevice: false };
       const realFetch = window.fetch.bind(window);
       window.fetch = (input, options) => {
@@ -72,7 +90,13 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
       };
     });
     const page = await context.newPage();
-    page.on('pageerror', () => report.pageErrors++);
+    page.on('pageerror', error => {
+      report.pageErrors++;
+      // Private diagnosis only; the public aggregate must not copy free-form
+      // exception strings. Fake audio workload contains no user recording.
+      report.privatePageErrors ||= [];
+      report.privatePageErrors.push({ name: error.name, message: error.message.slice(0, 300).replace(/https?:\/\/\S+/g, '[url]') });
+    });
     context.on('response', async response => {
       const request = response.request(), url = new URL(response.url());
       if (url.origin !== base) return;
@@ -99,6 +123,20 @@ function check(value, name) { report.checks.push({ name, passed: !!value }); ass
     await page.getByRole('button', { name: 'Ativar microfone', exact: true }).click();
     await page.waitForFunction(count => window.__captureQA.recorderCount > count, before);
     check(await page.evaluate(() => window.__captureQA.acquired === 1 && window.__captureQA.sameStream && window.__captureQA.stream.getAudioTracks().every(track => track.enabled)), 'Unmute resumes the same selected stream without reacquisition');
+    // UI clicks, real asynchronous MediaRecorder stop/data callbacks and real
+    // requests. No artificial callback delays or fake recorder implementation.
+    for (let cycle = 1; cycle < muteCycles; cycle++) {
+      await page.getByRole('button', { name: 'Mutar microfone', exact: true }).click();
+      check(await page.evaluate(() => window.__captureQA.stream.getAudioTracks().every(track => !track.enabled)), `Rapid mute ${cycle}: recorded tracks disabled`);
+      await page.getByRole('button', { name: 'Ativar microfone', exact: true }).click();
+      check(await page.evaluate(() => window.__captureQA.acquired === 1 && window.__captureQA.sameStream && window.__captureQA.stream.getAudioTracks().every(track => track.enabled)), `Rapid unmute ${cycle}: same live stream enabled`);
+      report.muteStress.completed = cycle + 1;
+    }
+    report.muteStress.completed = muteCycles;
+    const afterCycles = await page.evaluate(() => window.__captureQA.recorderCount);
+    await page.waitForFunction(count => window.__captureQA.recorderCount > count, afterCycles, { timeout: 20000 });
+    report.muteStress.timerResumed = true;
+    check(true, 'Recorder rotates again after the final rapid unmute; current timer survives old stop callbacks');
     // The real ASR response can arrive well after the recorder's next chunk.
     // Do not end/abort the room before observing the endpoint response.
     if (!report.asr.some(call => call.status === 200 && !call.skipped)) {

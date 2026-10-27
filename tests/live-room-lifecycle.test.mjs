@@ -826,6 +826,35 @@ test('delayed stop callback after rapid mute/unmute preserves the new recorder t
   h.timers.get(timer).fn();assert.equal(current.state,'inactive');h.qa.stopLiveRoom();
 });
 
+test('32 rapid manual mute cycles retain every accepted recorder tail and leave exactly one current chunk deadline', async () => {
+  const h = harness(async path => path === '/agent/transcribe' ? { text: '' } : { id: 'qa' });
+  const recorders = []; h.track.readyState = 'live';
+  h.context.MediaRecorder = class {
+    static isTypeSupported() { return true; }
+    constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorders.push(this); }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; }
+  };
+  h.qa.setCaptureCompatible(true); h.render(); await h.context.qa.startLiveRoom(); h.render();
+  for (let cycle = 0; cycle < 32; cycle++) {
+    const old = recorders.at(-1);
+    h.context.qa.toggleMicrophone(); h.context.qa.toggleMicrophone();
+    const current = recorders.at(-1), timer = h.qa.fallbackChunkTimerRef.current;
+    old.ondataavailable({ data: new Blob([`synthetic tail ${cycle}`]) }); old.onstop(); await flush();
+    assert.notEqual(old, current); assert.equal(h.qa.fallbackRecorderRef.current, current);
+    assert.equal(h.qa.fallbackChunkTimerRef.current, timer); assert.ok(h.timers.has(timer));
+    assert.equal(recorders.filter(recorder => recorder.state === 'recording').length, 1);
+    assert.equal(h.calls.filter(call => call.path === '/agent/transcribe').length, cycle + 1);
+    assert.equal(h.qa.microphoneMutedRef.current, false); assert.equal(h.qa.listeningRef.current, true);
+  }
+  const last = recorders.at(-1), timer = h.qa.fallbackChunkTimerRef.current;
+  h.timers.get(timer).fn(); last.ondataavailable({ data: new Blob(['final synthetic tail']) }); last.onstop(); await flush();
+  assert.equal(h.calls.filter(call => call.path === '/agent/transcribe').length, 33);
+  h.qa.stopLiveRoom(); const accepted = h.calls.length;
+  last.onstop(); await flush();
+  assert.equal(h.calls.length, accepted, 'late callbacks from the ended generation must not re-admit audio');
+});
+
 test('compatible capture recovery retains frozen device/profile instead of switching to default', async () => {
   const h = harness(); const requests = [];
   h.track.readyState = 'live'; h.navigator.onLine = true;

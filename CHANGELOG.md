@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-10-27 — Pressão, captura Edge/Brave e análise das pausas (candidata)
+
+- Bateria real local de 100 lotes/700 palavras concluiu nas duas saídas, com
+  gate de execução/cobertura completo e zero pausa, reset, rejeição ou skip.
+  Escoamento de 25min34,6s; pausa PiP mediana 1,899s/p95 4,139s, com tradução
+  já pronta nas 99 transições. Continuidade observada; velocidade reprovada.
+- Ampliado o teste real de captura para 24 ciclos de mute/desmute por navegador:
+  Edge e Brave passaram nas 61 verificações cada, com dispositivo sintético e
+  renderização omitida explicitamente; não é homologação acústica/visual.
+- Regressão determinística de 32 ciclos preserva todas as caudas e o timer atual.
+- Análise independente separa pausa com tradução pronta, tradução pendente e
+  ausência de entrada, além de medir defasagem das saídas do mesmo lote e avanço
+  de índices de pose (não FPS de GPU). Cinco testes novos cobrem os cálculos.
+- Exportação sanitizada dos testes de captura exclui erros livres, fala e IDs.
+- Runner Node limita workers de arquivo a um após falta de memória reproduzida
+  na execução irrestrita; os 164 testes continuam presentes, sem reduzir gates.
+- Método, resultados e limites em docs/performance/2026-10-27/README.md.
+- Sem merge/deploy; nenhuma alteração de Unity/WebGL ou velocidade dos sinais.
+
 ## 2026-10-26 — Fronteira do gravador e 502 indevidos (candidata)
 
 - Reproduzida e corrigida corrida em que `onstop` antigo apagava o timer do

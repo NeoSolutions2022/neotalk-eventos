@@ -64,6 +64,30 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
     return distribution(executions.slice(1).flatMap((execution, index) => execution.first >= executions[index].last
       ? [execution.first - executions[index].last] : []));
   };
+  // Segment raw callbacks instead of trusting exported aggregate percentiles.
+  // Translation-ready is NOT evidence that Unity has prepared the next pose.
+  const handoffSegments = output => {
+    const executions = rows.flatMap((row, rowIndex) => (row.executions || [])
+      .filter(execution => execution.output === output && finite(execution.first) && finite(execution.last) && execution.last >= execution.first)
+      .map(execution => ({ ...execution, rowIndex, points: row.points })))
+      .sort((a, b) => a.first - b.first);
+    const groups = { translationReady: [], translationPending: [], inputNotAdmitted: [], unknown: [] };
+    let repeatedExecutionTransitions = 0, overlappingTransitions = 0;
+    for (let index = 1; index < executions.length; index++) {
+      const previous = executions[index - 1], next = executions[index];
+      if (previous.rowIndex === next.rowIndex) { repeatedExecutionTransitions++; continue; }
+      if (next.first < previous.last) { overlappingTransitions++; continue; }
+      const admitted = next.points?.admitted, ready = next.points?.translation_ready;
+      let group = 'unknown';
+      if (finite(admitted) && admitted > previous.last) group = 'inputNotAdmitted';
+      else if (finite(admitted) && finite(ready) && ready >= admitted && ready <= next.first) {
+        group = ready <= previous.last ? 'translationReady' : 'translationPending';
+      }
+      groups[group].push(next.first - previous.last);
+    }
+    return { ...Object.fromEntries(Object.entries(groups).map(([key, values]) => [key, distribution(values)])),
+      repeatedExecutionTransitions, overlappingTransitions };
+  };
   const nativeObserved = output => {
     const executions = new Map();
     for (const event of Array.isArray(ledger?.observations) ? ledger.observations : []) {
@@ -73,14 +97,40 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
       if (event.type === 'neotalk:playback-frame' && Number.isInteger(event.frameCount) && event.frameCount > 0 &&
         Number.isInteger(event.frame) && event.frame >= 0 && event.frame < event.frameCount) {
         if (event.status === 'preparing') item.preparing ??= event.at;
-        if (['started','progress'].includes(event.status)) item.first ??= event.at;
-        if (event.status === 'finished' && event.frame === event.frameCount - 1) item.last ??= event.at;
+        if (['started','progress'].includes(event.status) && item.first === undefined) {
+          item.first = event.at; item.firstFrame = event.frame; item.frameCount = event.frameCount;
+        }
+        if (event.status === 'finished' && event.frame === event.frameCount - 1 && item.last === undefined) {
+          item.last = event.at; item.lastFrame = event.frame; item.lastFrameCount = event.frameCount;
+        }
       }
       executions.set(event.loadId, item);
     }
     const spans = point => distribution([...executions.values()].flatMap(item => finite(item[point]) && finite(item.first) &&
       finite(item.last) && item.first >= item[point] && item.last >= item.first ? [item.first - item[point]] : []));
-    return { ackToFirstFrameMs: spans('ack'), preparingToFirstFrameMs: spans('preparing') };
+    return { ackToFirstFrameMs: spans('ack'), preparingToFirstFrameMs: spans('preparing'),
+      frameAdvancePerSecond: distribution([...executions.values()].flatMap(item => finite(item.first) && finite(item.last) &&
+        item.last > item.first && item.frameCount === item.lastFrameCount && item.lastFrame >= item.firstFrame
+        ? [(item.lastFrame - item.firstFrame) * 1000 / (item.last - item.first)] : [])) };
+  };
+  const outputBarrier = () => {
+    const firstSkew = [], primaryTrailing = [], externalTrailing = [];
+    let pairedBatches = 0, ambiguousBatches = 0, tiedTerminalCallbacks = 0;
+    for (const row of rows) {
+      const valid = output => (row.executions || []).filter(execution => execution.output === output &&
+        finite(execution.first) && finite(execution.last) && execution.last >= execution.first);
+      const primary = valid('primary'), external = valid('external');
+      if (primary.length > 1 || external.length > 1) { ambiguousBatches++; continue; }
+      if (primary.length !== 1 || external.length !== 1) continue;
+      pairedBatches++;
+      firstSkew.push(Math.abs(primary[0].first - external[0].first));
+      const difference = primary[0].last - external[0].last;
+      if (difference > 0) primaryTrailing.push(difference);
+      else if (difference < 0) externalTrailing.push(-difference);
+      else tiedTerminalCallbacks++;
+    }
+    return { pairedBatches, ambiguousBatches, tiedTerminalCallbacks, firstCallbackSkewMs: distribution(firstSkew),
+      primaryTrailingMs: distribution(primaryTrailing), externalTrailingMs: distribution(externalTrailing) };
   };
   // Execution and diagnostic coverage are different gates. A cached pose may
   // have no new service call. The current export does not label that provenance,
@@ -100,6 +150,8 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
     translationByContextCacheMs: Object.fromEntries(['hit', 'miss', 'unreported'].map(group => [group,
       metric(intervals.translationRequest, rows.filter(row => group === 'hit' ? row.contextCacheHit === true : group === 'miss' ? row.contextCacheHit === false : row.contextCacheHit === undefined))])),
     handoffMs: { primary: handoff('primary'), external: externalRequired ? handoff('external') : distribution([]) },
+    handoffSegmentsMs: { primary: handoffSegments('primary'), external: externalRequired ? handoffSegments('external') : null },
+    outputBarrier: externalRequired ? outputBarrier() : null,
     nativeObservedIntervals: { primary: nativeObserved('primary'), external: nativeObserved('external') },
     // These stages overlap; never add them to infer total worker/Unity cost.
     serviceStagesMs: Object.fromEntries(['context_ms', 'provider_ms', 'validation_ms', 'endpoint_ms'].map(key => [key,
@@ -111,9 +163,12 @@ export function analyzeRealServices(latency, ledger, minimum = 100) {
       'Service authenticity depends on the documented harness and runtime; JSON declarations alone do not prove it.',
       'ASR is injected. Admission-to-frame is not acoustic speech-to-frame.',
       'Native events are browser-received callbacks, not GPU presentation timestamps.',
+      'Frame advance per second is observed pose-index advancement between callbacks, not GPU FPS; requested playback speed and scheduling must be considered separately.',
       'ACK/preparing-to-first-frame uses observed wall-clock callbacks and includes scheduling, not isolated Unity CPU compute.',
       'Browser-memory replay has no new service call; older unlabeled missing pose spans remain unknown, never zero.',
       'Handoff includes queue/idle and scheduling; samples must be segmented before comparison.',
+      'Handoff segments use next-batch admission/translation points at the prior terminal callback; translation readiness does not prove pose preparation. Repeats/overlaps are reported separately, not zero-valued gaps.',
+      'Output barrier skew pairs exactly one complete execution per output/batch; ambiguous retries are counted, not arbitrarily paired. Trailing callback time is not isolated renderer CPU cost.',
       'Service and pose timings overlap and do not separate internal worker queue/compute.'] };
 }
 
