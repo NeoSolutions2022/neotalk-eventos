@@ -83,7 +83,7 @@ class AnalyticsPostgresTests(unittest.TestCase):
         asyncio.run(sql("TRUNCATE analytics_events,analytics_rate_limits"))
         asyncio.run(
             sql(
-                "UPDATE analytics_settings SET enabled=TRUE,groups=$1::jsonb,sources='{\"access\":true,\"landing\":false}'::jsonb",
+                'UPDATE analytics_settings SET enabled=TRUE,groups=$1::jsonb,sources=\'{"access":true,"landing":false}\'::jsonb',
                 json.dumps(
                     dict.fromkeys(
                         ("funnel", "engagement", "heatmap", "errors", "attribution"),
@@ -349,7 +349,11 @@ class AnalyticsPostgresTests(unittest.TestCase):
         return b
 
     def enable_landing(self):
-        asyncio.run(sql("UPDATE analytics_settings SET sources='{\"access\":true,\"landing\":true}'::jsonb"))
+        asyncio.run(
+            sql(
+                'UPDATE analytics_settings SET sources=\'{"access":true,"landing":true}\'::jsonb'
+            )
+        )
 
     def landing_report(self):
         self.admin_client()
@@ -358,13 +362,21 @@ class AnalyticsPostgresTests(unittest.TestCase):
         return r.json()
 
     def test_10_landing_starts_disabled_without_disabling_form(self):
-        r = self.client.get("/api/v1/analytics/config?source=landing", headers=self.origin)
+        r = self.client.get(
+            "/api/v1/analytics/config?source=landing", headers=self.origin
+        )
         self.assertFalse(r.json()["enabled"])
         self.assertEqual(r.json()["release"], "landing-analytics-v1")
-        self.assertEqual(self.post(self.landing()).json(), {"accepted": 0, "disabled": True})
+        self.assertEqual(
+            self.post(self.landing()).json(), {"accepted": 0, "disabled": True}
+        )
         self.assertEqual(self.post(batch()).json()["accepted"], 1)
         self.enable_landing()
-        self.assertTrue(self.client.get("/api/v1/analytics/config?source=landing", headers=self.origin).json()["enabled"])
+        self.assertTrue(
+            self.client.get(
+                "/api/v1/analytics/config?source=landing", headers=self.origin
+            ).json()["enabled"]
+        )
 
     def test_11_source_isolation_and_backwards_compatibility(self):
         self.enable_landing()
@@ -379,12 +391,35 @@ class AnalyticsPostgresTests(unittest.TestCase):
         self.assertEqual(r["ctas"][0]["cta"], "hero_start")
         self.assertEqual(r["releases"], ["landing-analytics-v1"])
         self.assertNotIn(b["visitor"], json.dumps(r))
-        self.assertEqual(self.post(self.landing("form_view", "perfil_de_uso")).status_code, 400)
+        self.assertEqual(
+            self.post(self.landing("form_view", "perfil_de_uso")).status_code, 400
+        )
         self.assertEqual(self.post(batch("landing_view", "page")).status_code, 400)
 
     def test_12_landing_strict_payloads_and_granular_controls(self):
         self.enable_landing()
-        cases = [self.landing("cta_click", "hero", {"cta": "private@example.invalid", "target": "access"}), self.landing("cta_click", "hero", {"cta": "hero_start", "target": "access", "url": "secret"}), self.landing("faq_open", "faq", {"faq": "faq_99"}), self.landing("pricing_change", "pricing", {"plan": "pro", "hours": True, "billing": "annual"}), self.landing("landing_error", "page", {"code": "runtime", "message": "private"}), self.landing("heat_click", "contact", {"x": 2, "y": 3})]
+        cases = [
+            self.landing(
+                "cta_click",
+                "hero",
+                {"cta": "private@example.invalid", "target": "access"},
+            ),
+            self.landing(
+                "cta_click",
+                "hero",
+                {"cta": "hero_start", "target": "access", "url": "secret"},
+            ),
+            self.landing("faq_open", "faq", {"faq": "faq_99"}),
+            self.landing(
+                "pricing_change",
+                "pricing",
+                {"plan": "pro", "hours": True, "billing": "annual"},
+            ),
+            self.landing(
+                "landing_error", "page", {"code": "runtime", "message": "private"}
+            ),
+            self.landing("heat_click", "contact", {"x": 2, "y": 3}),
+        ]
         for b in cases:
             r = self.post(b)
             self.assertEqual(r.status_code, 400, r.text)
@@ -392,15 +427,39 @@ class AnalyticsPostgresTests(unittest.TestCase):
         b = self.landing()
         b["consent"]["funnel"] = False
         self.assertEqual(self.post(b).status_code, 400)
-        asyncio.run(sql("UPDATE analytics_settings SET groups=jsonb_set(groups,'{heatmap}','false')"))
-        self.assertEqual(self.post(self.landing("heat_click", "hero", {"x": 2, "y": 3})).json()["accepted"], 0)
+        asyncio.run(
+            sql(
+                "UPDATE analytics_settings SET groups=jsonb_set(groups,'{heatmap}','false')"
+            )
+        )
+        self.assertEqual(
+            self.post(self.landing("heat_click", "hero", {"x": 2, "y": 3})).json()[
+                "accepted"
+            ],
+            0,
+        )
 
     def test_13_landing_sections_heatmap_plan_errors_and_source_settings(self):
         self.enable_landing()
         for _ in range(3):
             b = self.landing()
             base = b["events"][0]
-            b["events"] = [{**base, "id": str(uuid4()), "name": name, "step": step, "props": props} for name, step, props in [("landing_view", "page", {}), ("section_view", "pricing", {}), ("heat_click", "pricing", {"x": 3, "y": 4}), ("active_time", "pricing", {"active_ms": 10000}), ("faq_open", "faq", {"faq": "faq_1"}), ("pricing_change", "pricing", {"plan": "pro", "hours": 25, "billing": "annual"}), ("landing_error", "page", {"code": "resource"})]]
+            b["events"] = [
+                {**base, "id": str(uuid4()), "name": name, "step": step, "props": props}
+                for name, step, props in [
+                    ("landing_view", "page", {}),
+                    ("section_view", "pricing", {}),
+                    ("heat_click", "pricing", {"x": 3, "y": 4}),
+                    ("active_time", "pricing", {"active_ms": 10000}),
+                    ("faq_open", "faq", {"faq": "faq_1"}),
+                    (
+                        "pricing_change",
+                        "pricing",
+                        {"plan": "pro", "hours": 25, "billing": "annual"},
+                    ),
+                    ("landing_error", "page", {"code": "resource"}),
+                ]
+            ]
             self.assertEqual(self.post(b).json()["accepted"], 7)
         r = self.landing_report()
         self.assertEqual(r["views"][0]["sessions"], 3)
@@ -412,9 +471,17 @@ class AnalyticsPostgresTests(unittest.TestCase):
         self.admin_client()
         settings = self.client.get("/api/v1/admin/analytics/settings").json()
         settings["sources"]["landing"] = False
-        r = self.client.put("/api/v1/admin/analytics/settings", json=settings, headers={"X-CSRF-Token": self.csrf})
+        r = self.client.put(
+            "/api/v1/admin/analytics/settings",
+            json=settings,
+            headers={"X-CSRF-Token": self.csrf},
+        )
         self.assertEqual(r.status_code, 200, r.text)
-        self.assertTrue(self.client.get("/api/v1/analytics/config", headers=self.origin).json()["enabled"])
+        self.assertTrue(
+            self.client.get("/api/v1/analytics/config", headers=self.origin).json()[
+                "enabled"
+            ]
+        )
         self.assertEqual(self.post(self.landing()).json()["accepted"], 0)
 
 

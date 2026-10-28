@@ -28,18 +28,59 @@ STEPS = (
     "contato",
     "sucesso",
 )
-LANDING_SECTIONS = ("page", "header", "hero", "product", "how_it_works", "use_cases", "pricing", "consumption", "deaf_access", "faq", "final_cta", "footer")
+LANDING_SECTIONS = (
+    "page",
+    "header",
+    "hero",
+    "product",
+    "how_it_works",
+    "use_cases",
+    "pricing",
+    "consumption",
+    "deaf_access",
+    "faq",
+    "final_cta",
+    "footer",
+)
 LANDING_CTAS = (
-    "header_login", "header_start", "mobile_login", "mobile_start", "hero_start", "hero_how",
-    "product_platform", "product_browser", "product_mobile", "deaf_access", "footer_start",
-    "footer_contact", "footer_instagram", "footer_email", "footer_platform", "footer_discover",
-    "pricing_pro", "pricing_business", "pricing_enterprise", "nav_product", "nav_how_it_works",
-    "nav_use_cases", "nav_pricing", "nav_deaf_access", "nav_faq", "nav_top", "footer_login",
+    "header_login",
+    "header_start",
+    "mobile_login",
+    "mobile_start",
+    "hero_start",
+    "hero_how",
+    "product_platform",
+    "product_browser",
+    "product_mobile",
+    "deaf_access",
+    "footer_start",
+    "footer_contact",
+    "footer_instagram",
+    "footer_email",
+    "footer_platform",
+    "footer_discover",
+    "pricing_pro",
+    "pricing_business",
+    "pricing_enterprise",
+    "nav_product",
+    "nav_how_it_works",
+    "nav_use_cases",
+    "nav_pricing",
+    "nav_deaf_access",
+    "nav_faq",
+    "nav_top",
+    "footer_login",
 )
 LANDING_EVENTS = {
-    "landing_view": "funnel", "section_view": "funnel", "cta_click": "funnel",
-    "faq_open": "funnel", "pricing_change": "funnel", "landing_error": "errors",
-    "active_time": "engagement", "scroll_depth": "engagement", "heat_click": "heatmap",
+    "landing_view": "funnel",
+    "section_view": "funnel",
+    "cta_click": "funnel",
+    "faq_open": "funnel",
+    "pricing_change": "funnel",
+    "landing_error": "errors",
+    "active_time": "engagement",
+    "scroll_depth": "engagement",
+    "heat_click": "heatmap",
 }
 EVENTS = {
     "form_view": "funnel",
@@ -193,7 +234,12 @@ class Event(BaseModel):
                 if not isinstance(v, str) or v not in LANDING_CTAS:
                     raise ValueError("invalid cta")
             elif k in ("target", "plan", "billing", "faq"):
-                values = {"target": ("access", "platform", "contact", "instagram", "section"), "plan": ("pro", "business", "shared"), "billing": ("monthly", "annual"), "faq": tuple(f"faq_{i}" for i in range(1, 9))}
+                values = {
+                    "target": ("access", "platform", "contact", "instagram", "section"),
+                    "plan": ("pro", "business", "shared"),
+                    "billing": ("monthly", "annual"),
+                    "faq": tuple(f"faq_{i}" for i in range(1, 9)),
+                }
                 if not isinstance(v, str) or v not in values[k]:
                     raise ValueError("invalid category")
             elif k == "hours":
@@ -205,14 +251,18 @@ class Event(BaseModel):
                 ):
                     raise ValueError("invalid action")
             elif k == "code":
-                if v not in (("runtime", "resource", "promise") if self.name == "landing_error" else (
-                    "nome",
-                    "email",
-                    "whatsapp",
-                    "network",
-                    "save_failed",
-                    "unknown",
-                )):
+                if v not in (
+                    ("runtime", "resource", "promise")
+                    if self.name == "landing_error"
+                    else (
+                        "nome",
+                        "email",
+                        "whatsapp",
+                        "network",
+                        "save_failed",
+                        "unknown",
+                    )
+                ):
                     raise ValueError("invalid code")
             elif k == "options":
                 if (
@@ -234,16 +284,20 @@ class Event(BaseModel):
             raise ValueError("missing time")
         if self.name == "scroll_depth" and "depth" not in self.props:
             raise ValueError("missing depth")
-        if (
-            "option" in self.props
-            and (self.step not in STEPS or self.props["option"] >= (6, 8, 7, 4, 0, 0)[STEPS.index(self.step)])
+        if "option" in self.props and (
+            self.step not in STEPS
+            or self.props["option"] >= (6, 8, 7, 4, 0, 0)[STEPS.index(self.step)]
         ):
             raise ValueError("invalid choice")
         if self.name == "cta_click" and set(self.props) != {"cta", "target"}:
             raise ValueError("missing cta")
         if self.name == "faq_open" and set(self.props) != {"faq"}:
             raise ValueError("missing faq")
-        if self.name == "pricing_change" and set(self.props) != {"plan", "hours", "billing"}:
+        if self.name == "pricing_change" and set(self.props) != {
+            "plan",
+            "hours",
+            "billing",
+        }:
             raise ValueError("missing pricing selection")
         if self.name == "landing_error" and set(self.props) != {"code"}:
             raise ValueError("missing failure category")
@@ -365,7 +419,12 @@ router = APIRouter()
 
 
 @router.get("/api/v1/analytics/config")
-async def public_config(request: Request, response: Response, source: Literal["access", "landing"] = "access", pool=Depends(get_pool)):
+async def public_config(
+    request: Request,
+    response: Response,
+    source: Literal["access", "landing"] = "access",
+    pool=Depends(get_pool),
+):
     response.headers["Cache-Control"] = "no-store"
     if request.headers.get("origin") not in origins():
         raise HTTPException(403, "Analytics origin not allowed")
@@ -433,7 +492,9 @@ async def _ingest(request: Request, pool):
                 else {}
             )
             events = [
-                e for e in payload.events if cfg["groups"].get(event_groups[e.name], False)
+                e
+                for e in payload.events
+                if cfg["groups"].get(event_groups[e.name], False)
             ]
             async with c.transaction():
                 accepted = 0
@@ -467,7 +528,11 @@ async def _ingest(request: Request, pool):
 async def settings(user: CurrentUser = Depends(admin_user), pool=Depends(get_pool)):
     async with pool.acquire(timeout=1) as c:
         cfg = await configuration(c)
-    return {"enabled": cfg["enabled"], "groups": cfg["groups"], "sources": cfg["sources"]}
+    return {
+        "enabled": cfg["enabled"],
+        "groups": cfg["groups"],
+        "sources": cfg["sources"],
+    }
 
 
 @router.put("/api/v1/admin/analytics/settings")
