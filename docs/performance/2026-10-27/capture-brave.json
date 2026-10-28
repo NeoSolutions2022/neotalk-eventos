@@ -1,0 +1,42 @@
+{
+  "kind": "synthetic-microphone-managed-capture-validation",
+  "result": "PASS",
+  "browserName": "brave",
+  "browserVersion": "156.0.8078.48",
+  "renderer": "omit",
+  "platformImage": "sha256:6eba1bb4ddb2c08f4c4adfdc5c8a1d5317e22bb5f212123f4aad8ec6f40535b1",
+  "apiImage": "sha256:1079556de6866e294e8617ed1206f4e18a910d8d01e9fe87ee149e8c3028911b",
+  "sourceSha256": {
+    "app/captureAudio.ts": "0f5361764a2256c499cf93426a90548c5de54a4836accac64c151197b23ed86b",
+    "app/LiveRoom.tsx": "9afe7299da3f604aa0e42323aee819137dc92fab418fcc564ded046389d8e182",
+    "backend/app/audio_input.py": "265943c2baafd18c081a8c35b97a7093b4963904aaf3b35ae81ddbe300bfebab",
+    "backend/app/main.py": "5ed79254fa467a8ba2c66369ab13ad88d2312b8931b11d4a0f51a5116f4093e5",
+    "backend/app/services.py": "87ccbdec5a4c4a9266331b3a1c0934bc34f811d412407379d66acc0b25b7e72b",
+    "tests/capture-browser.cjs": "b0960248f88c4744441a667125cace33dfde9ab292211a0d4861b00f46b26f1f"
+  },
+  "muteStress": {
+    "requested": 24,
+    "completed": 24,
+    "timerResumed": true
+  },
+  "checks": {
+    "total": 61,
+    "passed": 61,
+    "failed": 0,
+    "unknown": 0
+  },
+  "asr": {
+    "statuses": {
+      "200": 25
+    },
+    "emptyContainer": 24,
+    "normal200": 1
+  },
+  "pageErrors": 0,
+  "limitations": [
+    "Real browser capture/MediaRecorder and ASR requests; synthetic audio, not physical microphone/voice QA.",
+    "Omitted rendering does not certify animation, native PiP, permissions in a user profile or device-specific behavior.",
+    "Empty-container acknowledgements are not provider successes; normal200 counts HTTP responses, not recognition accuracy.",
+    "Only allowlisted counters/hashes leave the private run; free-form errors, text, IDs, cookies and keys are excluded."
+  ]
+}

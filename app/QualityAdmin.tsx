@@ -50,8 +50,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const audioObjectUrlRef = useRef("");
   const recordingStartedAtRef = useRef(0);
   const recordingLimitTimerRef = useRef<number | null>(null);
-  const latestGlossRef = useRef("");
-  const avatarLoopTimerRef = useRef<number | null>(null);
   const [integrations, setIntegrations] = useState<Integrations | null>(null);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [instructions, setInstructions] = useState("");
@@ -70,6 +68,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [avatarReady, setAvatarReady] = useState(false);
+  const [widgetConnected, setWidgetConnected] = useState(false);
   const [avatar, setAvatar] = useState<AvatarId>("elia");
   const [avatarStatus, setAvatarStatus] = useState("Carregando avatar");
   const [rating, setRating] = useState(0);
@@ -80,7 +79,9 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   const [recording, setRecording] = useState(false);
   const [savingReview, setSavingReview] = useState(false);
   const [hasSavedAudio, setHasSavedAudio] = useState(false);
-  const widgetUrl = `${widgetBase}?avatar=elia&loop=0&background=%2310233f`;
+  // Let the loaded Unity clip loop natively. Re-sending `sign` on an estimated
+  // timer repeats API work and can interrupt the final words of longer clips.
+  const widgetUrl = `${widgetBase}?avatar=elia&loop=1&background=%2310233f`;
   const widgetOrigin = new URL(widgetBase).origin;
 
   useEffect(() => {
@@ -91,10 +92,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [catalogOpen]);
-
-  useEffect(() => {
-    latestGlossRef.current = run?.gloss_text || "";
-  }, [run?.gloss_text]);
 
   const releaseRecorder = () => {
     if (recordingLimitTimerRef.current) window.clearTimeout(recordingLimitTimerRef.current);
@@ -145,11 +142,6 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     };
   }, [run?.id]);
 
-  const clearAvatarLoop = () => {
-    if (avatarLoopTimerRef.current) window.clearTimeout(avatarLoopTimerRef.current);
-    avatarLoopTimerRef.current = null;
-  };
-
   const loadAdmin = useCallback(async () => {
     const [integrationData, promptData, wordData, historyData] = await Promise.all([
       api<Integrations>("/admin/integrations"),
@@ -175,27 +167,21 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== widgetOrigin || event.source !== frameRef.current?.contentWindow) return;
-      const data = event.data as { type?: string; status?: string; message?: string; words?: unknown[] };
+      const data = event.data as { type?: string; avatar?: string; status?: string; message?: string; words?: unknown[] };
+      if (!data || typeof data !== "object" || (data.avatar && data.avatar !== avatar)) return;
       if (data.type === "neotalk:ready") {
+        setWidgetConnected(true);
         setAvatarReady(true);
         setAvatarStatus(`${avatarNames[avatar]} pronta`);
       } else if (data.type === "neotalk:status" && data.status) {
         setAvatarStatus(data.status);
       } else if (data.type === "neotalk:playing") {
         setAvatarStatus(`${avatarNames[avatar]} sinalizando em loop`);
-        clearAvatarLoop();
-        const wordCount = Array.isArray(data.words) ? data.words.length : latestGlossRef.current.split(/\s+/).filter(Boolean).length;
-        avatarLoopTimerRef.current = window.setTimeout(() => {
-          const gloss = latestGlossRef.current;
-          if (!gloss || !frameRef.current?.contentWindow) return;
-          frameRef.current.contentWindow.postMessage({ type: "neotalk:sign", phrase: gloss }, widgetOrigin);
-        }, Math.max(2800, wordCount * 850));
       } else if (data.type === "neotalk:error") {
         if (isNonBlockingAvatarError(data.message)) {
           setAvatarStatus(`${avatarNames[avatar]} sinalizando em loop`);
           return;
         }
-        clearAvatarLoop();
         setAvatarStatus(data.message || "Erro no avatar");
       }
     };
@@ -203,23 +189,15 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
     return () => window.removeEventListener("message", onMessage);
   }, [avatar, widgetOrigin]);
 
-  useEffect(() => {
-    if (!avatarReady || !frameRef.current?.contentWindow) return;
-    clearAvatarLoop();
-    const frameWindow = frameRef.current.contentWindow;
-    frameWindow.postMessage({ type: "neotalk:set-avatar", avatar }, widgetOrigin);
-    setAvatarStatus(`Trocando para ${avatarNames[avatar]}`);
-    const timer = window.setTimeout(() => {
-      if (latestGlossRef.current) frameWindow.postMessage({ type: "neotalk:sign", phrase: latestGlossRef.current }, widgetOrigin);
-      else setAvatarStatus(`${avatarNames[avatar]} pronta`);
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [avatar, avatarReady, widgetOrigin]);
-
-  useEffect(() => {
-    clearAvatarLoop();
-    return clearAvatarLoop;
-  }, [run?.id]);
+  const selectAvatar = (next: AvatarId) => {
+    if (next === avatar || !frameRef.current?.contentWindow) return;
+    setAvatarReady(false);
+    setAvatar(next);
+    setAvatarStatus(`Trocando para ${avatarNames[next]}`);
+    frameRef.current.contentWindow.postMessage({ type: "neotalk:set-avatar", avatar: next }, widgetOrigin);
+    // The existing run is sent by the effect below only after this avatar's
+    // actual ready event, not an arbitrary 700 ms after a change.
+  };
 
   useEffect(() => {
     if (!run?.gloss_text || !avatarReady) return;
@@ -323,8 +301,8 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
 
   const executeTest = async () => {
     setRunning(true);
-    clearAvatarLoop();
-    latestGlossRef.current = "";
+    // A new/failed comparison must not display the previous run as its result.
+    frameRef.current?.contentWindow?.postMessage({ type: "neotalk:pause" }, widgetOrigin);
     setRun(null);
     setRating(0);
     setQaNotes("");
@@ -477,7 +455,7 @@ export default function QualityAdmin({ showToast }: { showToast: (message: strin
         <div className="compare-grid">
           <article className="quality-player"><div className="quality-player-title"><div><span>REFERÊNCIA</span><b>Última versão do vídeo</b></div><small>{run?.status === "ready" ? "Reprodução em loop" : run?.status === "video_error" ? "Erro" : run ? "Processando" : "Aguardando teste"}</small></div><div className="quality-media">{run?.video_url ? <video src={run.video_url} controls autoPlay loop><track kind="captions" /></video> : <div className="media-empty"><span>▶</span><p>{run?.error_message || "O vídeo gerado aparecerá aqui."}</p></div>}</div></article>
           <article className="quality-player quality-avatar-player">
-            <div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} onChange={(event) => setAvatar(event.target.value as AvatarId)}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div>
+            <div className="quality-player-title quality-avatar-title"><div><span>AVATAR</span><b>{avatarNames[avatar]} · widget oficial</b></div><div className="quality-avatar-controls"><select aria-label="Avatar para comparação" value={avatar} disabled={!widgetConnected} onChange={(event) => selectAvatar(event.target.value as AvatarId)}><option value="lia">Lia</option><option value="asuna">Asuna</option><option value="elia">Elia</option></select><small>{avatarStatus}</small></div></div>
             <div className="quality-media"><iframe ref={frameRef} src={widgetUrl} title={`${avatarNames[avatar]} para comparação de qualidade`} allow="fullscreen" /></div>
           </article>
         </div>

@@ -51,7 +51,7 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   ]);
 
   assert.match(liveRoom, /webkitSpeechRecognition/);
-  assert.match(liveRoom, /getUserMedia\(\{ audio: true \}\)/);
+  assert.match(liveRoom, /acquireCapture\(navigator\.mediaDevices, captureSelectionRef\.current\)/);
   assert.match(liveRoom, /stageRef\.current\?\.requestFullscreen\(\)/);
   assert.match(liveRoom, /className="live-captions"/);
   assert.match(liveRoom, /window\.location\.href = "\/salas"/);
@@ -120,7 +120,8 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(quality, /option value="asuna">Asuna/);
   assert.match(quality, /option value="elia">Elia/);
   assert.match(quality, /avatar=elia/);
-  assert.match(quality, /avatarLoopTimerRef/);
+  assert.match(quality, /avatar=elia&loop=1/);
+  assert.doesNotMatch(quality, /avatarLoopTimerRef/);
   assert.match(quality, /sinalizando em loop/);
   assert.match(quality, /controls autoPlay loop/);
   assert.match(liveRoom, /isNonBlockingAvatarError/);

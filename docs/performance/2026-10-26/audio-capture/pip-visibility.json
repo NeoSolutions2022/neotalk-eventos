@@ -1,0 +1,79 @@
+{
+  "kind": "viewport-continuity-not-speedup-benchmark",
+  "date": "2026-10-26",
+  "browser": "Edge 155.0.4283.62 headless",
+  "services": "local real candidates plus remote GPT/NeoTalk; real Unity and Document PiP; controlled ASR",
+  "beforePlatformImage": "sha256:0f63603c6f49cfd17a1811f3eb3e7e4432fefef9a389da17355078331f00fca1",
+  "candidatePlatformImage": "sha256:97b0ff658601735327b84afe2dc48078afdd8272d67af36230774e166f835f7f",
+  "avatarImageUnchanged": "sha256:0d1428f3d8f2f516ff5184da7f1e5a952e3b2e84dd2a514eb23429c3899a3975",
+  "candidateHarnessSha256": "6d92bfd7670c7ada8b0b264e663cbc5276050e5c92f6ad63c270ff26a91a46b1",
+  "scenarios": [
+    {
+      "source": "real-services-1793037811769",
+      "variant": "before",
+      "primaryView": "offscreen",
+      "requestedBatches": 1,
+      "result": "FAIL",
+      "observationLimitSeconds": 55,
+      "externalTerminalCallbacks": 1,
+      "completedQueueBatches": 0,
+      "documentVisibility": "visible",
+      "primaryRect": { "top": -700, "bottom": -234, "viewportHeight": 1000 }
+    },
+    {
+      "source": "real-services-1793037658977",
+      "variant": "before",
+      "primaryView": "visible",
+      "requestedBatches": 3,
+      "result": "PASS",
+      "elapsedMs": 51482,
+      "completedQueueBatches": 3,
+      "primaryCompletedExecutions": 3,
+      "externalCompletedExecutions": 3
+    },
+    {
+      "source": "real-services-1793037979528",
+      "variant": "candidate",
+      "primaryView": "offscreen",
+      "requestedBatches": 3,
+      "result": "PASS_EXTERNAL_CONTINUITY_ONLY",
+      "elapsedMs": 39448,
+      "completedQueueBatches": 3,
+      "primaryCompletedExecutions": 0,
+      "externalCompletedExecutions": 3,
+      "missingPrimaryFirstFrames": 3,
+      "missingPrimaryLastFrames": 3,
+      "automaticCapturePauses": 0,
+      "runtimeResets": 0,
+      "errors": 0,
+      "skipped": 0,
+      "pending": 0,
+      "rejectedInput": 0
+    },
+    {
+      "source": "real-services-1793038069502",
+      "variant": "candidate",
+      "primaryView": "visible",
+      "requestedBatches": 3,
+      "result": "PASS_DUAL_OUTPUT",
+      "elapsedMs": 55233,
+      "completedQueueBatches": 3,
+      "primaryCompletedExecutions": 3,
+      "externalCompletedExecutions": 3,
+      "missingFirstFrames": 0,
+      "missingLastFrames": 0,
+      "missingRequiredServiceSpans": 0,
+      "automaticCapturePauses": 0,
+      "runtimeResets": 0,
+      "errors": 0,
+      "skipped": 0,
+      "pending": 0,
+      "rejectedInput": 0
+    }
+  ],
+  "limitations": [
+    "Different visibility scenarios and cache state: elapsed times are not speedup evidence.",
+    "Offscreen-primary completion uses actual external terminal frames; absent primary frames remain absent.",
+    "Not a long-run, physical speech, acoustic, production or cross-browser approval."
+  ]
+}

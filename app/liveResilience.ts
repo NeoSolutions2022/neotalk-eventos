@@ -16,6 +16,8 @@ export class OrderedTranscriptBuffer {
   private nextIssued = 0;
   private nextDelivered = 0;
   private completed = new Map<number, string>();
+  // Completed later slots still hold text until the oldest request settles.
+  get bufferedCompletions() { return this.completed.size; }
   issue() { return this.nextIssued++; }
   complete(sequence: number, text: string): string[] {
     if (sequence < this.nextDelivered || sequence >= this.nextIssued) return [];

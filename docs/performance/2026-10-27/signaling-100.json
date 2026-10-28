@@ -1,0 +1,411 @@
+{
+  "type": "real-service-integration-smoke-not-speedup-approval",
+  "workload": "ten-phrase-pitch-cycle",
+  "elapsedMs": 1534579,
+  "browserVersion": "155.0.4283.62",
+  "runtimeImages": {
+    "platform": "sha256:6eba1bb4ddb2c08f4c4adfdc5c8a1d5317e22bb5f212123f4aad8ec6f40535b1",
+    "api": "sha256:1079556de6866e294e8617ed1206f4e18a910d8d01e9fe87ee149e8c3028911b",
+    "avatar": "sha256:0d1428f3d8f2f516ff5184da7f1e5a952e3b2e84dd2a514eb23429c3899a3975"
+  },
+  "harnessSha256": "6d92bfd7670c7ada8b0b264e663cbc5276050e5c92f6ad63c270ff26a91a46b1",
+  "http": {
+    "heartbeat:204": 155,
+    "batch:201": 100,
+    "batch:200": 400,
+    "translate:200": 100,
+    "pose_submit:202": 95,
+    "pose_poll:202": 307,
+    "pose_poll:200": 95
+  },
+  "analysis": {
+    "kind": "local-real-service-evidence-analysis",
+    "minimum": 100,
+    "observedBatches": 100,
+    "completeBatches": 100,
+    "consistentSampleGate": true,
+    "executionSampleGate": true,
+    "diagnosticCoverageComplete": true,
+    "gate": {
+      "translationMode": true,
+      "schemaSupported": true,
+      "uniqueTraceIds": true,
+      "noEviction": true,
+      "minimumCompleteSamples": true,
+      "noIncompleteOrFailedRows": true,
+      "realSpansPresent": true,
+      "captureUninterrupted": true,
+      "noRuntimeResets": true,
+      "harnessFinished": true
+    },
+    "outcomes": {
+      "complete": 100,
+      "error": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "pending": 0
+    },
+    "missing": {
+      "orderedTimeline": 0,
+      "primaryExecution": 0,
+      "externalExecution": 0,
+      "serverTimings": 0,
+      "poseTimings": 5,
+      "requiredPoseTimings": 0
+    },
+    "pressure": {
+      "capturePauses": 0,
+      "automaticResumes": 0,
+      "rejectedSourceWords": 0,
+      "blockedAdmissionAttempts": 0,
+      "rejectedAudioChunks": 0
+    },
+    "poseSources": {
+      "service": 95,
+      "browserMemory": 5,
+      "unreported": 0
+    },
+    "runtimeResets": 0,
+    "queue": {
+      "peakPendingBatches": 85,
+      "sourceWords": 700,
+      "observedInputDurationMs": 234660.80000000075
+    },
+    "metricsMs": {
+      "admittedToTranslation": {
+        "count": 100,
+        "mean": 624068.5170000002,
+        "p50": 627966.6000000015,
+        "p95": 1186786.0999999996,
+        "max": 1261245.3000000007
+      },
+      "translationRequest": {
+        "count": 100,
+        "mean": 2091.979999999795,
+        "p50": 1935.199999999255,
+        "p95": 3096.0999999996275,
+        "max": 6305.39999999851
+      },
+      "readyToDispatch": {
+        "count": 100,
+        "mean": 28204.54200000018,
+        "p50": 27984.700000001118,
+        "p95": 44925.20000000112,
+        "max": 47963.40000000037
+      },
+      "dispatchToFirstFrame": {
+        "count": 100,
+        "mean": 1958.9539999999106,
+        "p50": 1818.4000000003725,
+        "p95": 4103.9000000003725,
+        "max": 10675.89999999851
+      },
+      "admissionToFirstFrame": {
+        "count": 100,
+        "mean": 656323.993,
+        "p50": 659399.4000000004,
+        "p95": 1216763.4000000004,
+        "max": 1289928.4000000004
+      },
+      "nativePlayback": {
+        "count": 100,
+        "mean": 13262.911000000071,
+        "p50": 12804.099999999627,
+        "p95": 23648.700000001118,
+        "max": 24901.39999999851
+      }
+    },
+    "translationByContextCacheMs": {
+      "hit": {
+        "count": 95,
+        "mean": 2074.703157894529,
+        "p50": 1946.699999999255,
+        "p95": 3096.0999999996275,
+        "max": 6305.39999999851
+      },
+      "miss": {
+        "count": 5,
+        "mean": 2420.239999999851,
+        "p50": 1868.2999999988824,
+        "p95": 4407.799999998882,
+        "max": 4407.799999998882
+      },
+      "unreported": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      }
+    },
+    "handoffMs": {
+      "primary": {
+        "count": 99,
+        "mean": 1947.1151515150425,
+        "p50": 1855.5,
+        "p95": 4105,
+        "max": 7413.0999999996275
+      },
+      "external": {
+        "count": 99,
+        "mean": 1924.087878787909,
+        "p50": 1898.7000000011176,
+        "p95": 4139.4000000003725,
+        "max": 7070
+      }
+    },
+    "handoffSegmentsMs": {
+      "primary": {
+        "translationReady": {
+          "count": 99,
+          "mean": 1947.1151515150425,
+          "p50": 1855.5,
+          "p95": 4105,
+          "max": 7413.0999999996275
+        },
+        "translationPending": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        },
+        "inputNotAdmitted": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        },
+        "unknown": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        },
+        "repeatedExecutionTransitions": 0,
+        "overlappingTransitions": 0
+      },
+      "external": {
+        "translationReady": {
+          "count": 99,
+          "mean": 1924.087878787909,
+          "p50": 1898.7000000011176,
+          "p95": 4139.4000000003725,
+          "max": 7070
+        },
+        "translationPending": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        },
+        "inputNotAdmitted": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        },
+        "unknown": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        },
+        "repeatedExecutionTransitions": 0,
+        "overlappingTransitions": 0
+      }
+    },
+    "outputBarrier": {
+      "pairedBatches": 100,
+      "ambiguousBatches": 0,
+      "tiedTerminalCallbacks": 0,
+      "firstCallbackSkewMs": {
+        "count": 100,
+        "mean": 56.0880000000447,
+        "p50": 50.69999999925494,
+        "p95": 137.2999999988824,
+        "max": 301.40000000037253
+      },
+      "primaryTrailingMs": {
+        "count": 13,
+        "mean": 69.65384615456256,
+        "p50": 33.69999999925494,
+        "p95": 313.7000000011176,
+        "max": 313.7000000011176
+      },
+      "externalTrailingMs": {
+        "count": 87,
+        "mean": 86.65977011498963,
+        "p50": 84.09999999962747,
+        "p95": 161.59999999962747,
+        "max": 201.90000000037253
+      }
+    },
+    "nativeObservedIntervals": {
+      "primary": {
+        "ackToFirstFrameMs": {
+          "count": 100,
+          "mean": 1508.12,
+          "p50": 1478,
+          "p95": 3533,
+          "max": 6275
+        },
+        "preparingToFirstFrameMs": {
+          "count": 82,
+          "mean": 1784.7682926829268,
+          "p50": 1610,
+          "p95": 3451,
+          "max": 6234
+        },
+        "frameAdvancePerSecond": {
+          "count": 100,
+          "mean": 23.682162490817927,
+          "p50": 23.88216728037875,
+          "p95": 24.01483541956421,
+          "max": 24.22790202342918
+        }
+      },
+      "external": {
+        "ackToFirstFrameMs": {
+          "count": 100,
+          "mean": 1514.81,
+          "p50": 1498,
+          "p95": 3393,
+          "max": 5948
+        },
+        "preparingToFirstFrameMs": {
+          "count": 82,
+          "mean": 1817.5975609756097,
+          "p50": 1646,
+          "p95": 3510,
+          "max": 5910
+        },
+        "frameAdvancePerSecond": {
+          "count": 100,
+          "mean": 23.679760780891993,
+          "p50": 23.846668152440383,
+          "p95": 23.9972865259052,
+          "max": 24.060533922802243
+        }
+      }
+    },
+    "serviceStagesMs": {
+      "context_ms": {
+        "count": 100,
+        "mean": 0.4638189599872078,
+        "p50": 0.0027010000280824897,
+        "p95": 0.008715999911146355,
+        "max": 24.893114000008154
+      },
+      "provider_ms": {
+        "count": 100,
+        "mean": 2005.493533840003,
+        "p50": 1821.5040680000243,
+        "p95": 3031.3421749999634,
+        "max": 6248.5877190000565
+      },
+      "validation_ms": {
+        "count": 100,
+        "mean": 0.015965239992254965,
+        "p50": 0.010065999987318719,
+        "p95": 0.04899900000054913,
+        "max": 0.07929599996714387
+      },
+      "endpoint_ms": {
+        "count": 100,
+        "mean": 2006.0025335900054,
+        "p50": 1821.537137000007,
+        "p95": 3031.4413889998377,
+        "max": 6248.618602000079
+      }
+    },
+    "poseStagesMs": {
+      "total_ms": {
+        "count": 95,
+        "mean": 4772.843157894616,
+        "p50": 5308.699999999255,
+        "p95": 7173.5,
+        "max": 7946.60000000149
+      },
+      "submit_request_ms": {
+        "count": 95,
+        "mean": 240.65894736827988,
+        "p50": 227.19999999925494,
+        "p95": 301.30000000074506,
+        "max": 783.8000000007451
+      },
+      "poll_request_ms": {
+        "count": 95,
+        "mean": 2360.88631578976,
+        "p50": 2445.6000000033528,
+        "p95": 3096.9000000003725,
+        "max": 3277.60000000149
+      },
+      "poll_wait_ms": {
+        "count": 95,
+        "mean": 2171.188421052381,
+        "p50": 2841.599999997765,
+        "p95": 4064.7000000011176,
+        "max": 4101.999999998137
+      },
+      "retry_wait_ms": {
+        "count": 95,
+        "mean": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "proxy_upstream_submit_ms": {
+        "count": 95,
+        "mean": 178.25436305263958,
+        "p50": 172.54813800002466,
+        "p95": 176.98932000007517,
+        "max": 708.0248049999938
+      },
+      "proxy_upstream_status_ms": {
+        "count": 95,
+        "mean": 708.1646885473591,
+        "p50": 811.2053720000176,
+        "p95": 979.0216389999387,
+        "max": 1307.2753140000088
+      },
+      "proxy_download_ms": {
+        "count": 95,
+        "mean": 1163.472814589479,
+        "p50": 1206.600404000028,
+        "p95": 1512.3438340000348,
+        "max": 1805.463070000087
+      },
+      "proxy_validation_persist_ms": {
+        "count": 95,
+        "mean": 256.5188017684267,
+        "p50": 247.80994100001408,
+        "p95": 448.6245460000191,
+        "max": 510.31474999999205
+      }
+    },
+    "limitations": [
+      "This gate checks internal sample consistency, NOT production approval, speedup, fluidity or linguistic accuracy.",
+      "Service authenticity depends on the documented harness and runtime; JSON declarations alone do not prove it.",
+      "ASR is injected. Admission-to-frame is not acoustic speech-to-frame.",
+      "Native events are browser-received callbacks, not GPU presentation timestamps.",
+      "Frame advance per second is observed pose-index advancement between callbacks, not GPU FPS; requested playback speed and scheduling must be considered separately.",
+      "ACK/preparing-to-first-frame uses observed wall-clock callbacks and includes scheduling, not isolated Unity CPU compute.",
+      "Browser-memory replay has no new service call; older unlabeled missing pose spans remain unknown, never zero.",
+      "Handoff includes queue/idle and scheduling; samples must be segmented before comparison.",
+      "Handoff segments use next-batch admission/translation points at the prior terminal callback; translation readiness does not prove pose preparation. Repeats/overlaps are reported separately, not zero-valued gaps.",
+      "Output barrier skew pairs exactly one complete execution per output/batch; ambiguous retries are counted, not arbitrarily paired. Trailing callback time is not isolated renderer CPU cost.",
+      "Service and pose timings overlap and do not separate internal worker queue/compute."
+    ]
+  },
+  "limitations": [
+    "Controlled ASR, not a physical microphone test.",
+    "Small integration run; workload, GPT, cache, polling and clip lengths can vary. Not a controlled speedup A/B.",
+    "No transcript, user ID, session ID, raw event, cookie or credential is exported."
+  ]
+}

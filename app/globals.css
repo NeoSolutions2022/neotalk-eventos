@@ -253,6 +253,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 .audio-source > div { display: flex; flex-direction: column; }.audio-source small { color: #97a1b1; font-size: 8px; }.audio-source b { font-size: 11px; margin-top: 3px; }
 .audio-source button { margin-left: auto; border: 0; background: none; color: #8e99aa; }
 .audio-source.listening { border-color: rgba(31,168,237,.55); background: #f6fbfe; box-shadow: 0 0 0 3px rgba(31,168,237,.08); }
+.capture-config { display: grid; gap: 12px; }
+.capture-config > label { margin: 0; }
+.capture-config > small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.capture-config > button { justify-self: start; }
+.capture-config .capture-effective { border-top: 1px solid var(--line); padding-top: 10px; }
 .audio-level { display: flex; align-items: center; gap: 3px; height: 26px; margin-left: auto; }
 .audio-level i { width: 3px; height: 7px; border-radius: 4px; background: #cbd5df; }
 .audio-source.listening .audio-level i { background: var(--cyan); animation: audio-wave .8s ease-in-out infinite alternate; }

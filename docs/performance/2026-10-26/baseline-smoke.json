@@ -1,0 +1,301 @@
+{
+  "type": "real-service-prefetch-smoke-not-speedup-approval",
+  "elapsedMs": 99095,
+  "browserVersion": "155.0.4283.62",
+  "runtimeImages": {
+    "platform": "sha256:442cc21061331a041836bbc71f8ba673931316f3b5a832b890331cf137fac07d",
+    "api": "sha256:9753fda108a0662fa254bb036d44ff49d298f2960d80352df603e1af73dfdca7",
+    "avatar": "sha256:b7cccd47f85dc4237b9a02319e97ee8259abe58fd5a8455a2133b98459ef3c6b"
+  },
+  "harnessSha256": "6a2f823685c726c7b71ac0db6bc9cdf60f79e0300ff2831025d483924c51b47a",
+  "http": {
+    "heartbeat:204": 11,
+    "batch:201": 5,
+    "batch:200": 20,
+    "translate:200": 5,
+    "pose_submit:202": 3,
+    "pose_poll:202": 11,
+    "pose_poll:200": 3
+  },
+  "analysis": {
+    "kind": "local-real-service-evidence-analysis",
+    "minimum": 5,
+    "observedBatches": 5,
+    "completeBatches": 5,
+    "consistentSampleGate": true,
+    "executionSampleGate": true,
+    "diagnosticCoverageComplete": true,
+    "gate": {
+      "translationMode": true,
+      "schemaSupported": true,
+      "uniqueTraceIds": true,
+      "noEviction": true,
+      "minimumCompleteSamples": true,
+      "noIncompleteOrFailedRows": true,
+      "realSpansPresent": true,
+      "captureUninterrupted": true,
+      "noRuntimeResets": true,
+      "harnessFinished": true
+    },
+    "outcomes": {
+      "complete": 5,
+      "error": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "pending": 0
+    },
+    "missing": {
+      "orderedTimeline": 0,
+      "primaryExecution": 0,
+      "externalExecution": 0,
+      "serverTimings": 0,
+      "poseTimings": 2,
+      "requiredPoseTimings": 0
+    },
+    "pressure": {
+      "capturePauses": 0,
+      "automaticResumes": 0,
+      "rejectedSourceWords": 0,
+      "blockedAdmissionAttempts": 0,
+      "rejectedAudioChunks": 0
+    },
+    "poseSources": {
+      "service": 3,
+      "browserMemory": 2,
+      "unreported": 0
+    },
+    "runtimeResets": 0,
+    "queue": {
+      "peakPendingBatches": 4,
+      "sourceWords": 35,
+      "observedInputDurationMs": 9421.699999988079
+    },
+    "metricsMs": {
+      "admittedToTranslation": {
+        "count": 5,
+        "mean": 12075.419999998809,
+        "p50": 1.8999999910593033,
+        "p95": 37044.70000000298,
+        "max": 37044.70000000298
+      },
+      "translationRequest": {
+        "count": 5,
+        "mean": 2500.380000001192,
+        "p50": 2158.1000000089407,
+        "p95": 3472.2000000029802,
+        "max": 3472.2000000029802
+      },
+      "readyToDispatch": {
+        "count": 5,
+        "mean": 26217.060000002384,
+        "p50": 31979,
+        "p95": 38835.09999999404,
+        "max": 38835.09999999404
+      },
+      "dispatchToFirstFrame": {
+        "count": 5,
+        "mean": 2242.0599999994038,
+        "p50": 520.1999999880791,
+        "p95": 9364,
+        "max": 9364
+      },
+      "admissionToFirstFrame": {
+        "count": 5,
+        "mean": 43034.92000000179,
+        "p50": 42170.80000001192,
+        "p95": 73621.70000000298,
+        "max": 73621.70000000298
+      },
+      "nativePlayback": {
+        "count": 5,
+        "mean": 16594.559999999405,
+        "p50": 17253,
+        "p95": 17464.20000000298,
+        "max": 17464.20000000298
+      }
+    },
+    "translationByContextCacheMs": {
+      "hit": {
+        "count": 4,
+        "mean": 2257.425000000745,
+        "p50": 2114.5,
+        "p95": 2864.9000000059605,
+        "max": 2864.9000000059605
+      },
+      "miss": {
+        "count": 1,
+        "mean": 3472.2000000029802,
+        "p50": 3472.2000000029802,
+        "p95": 3472.2000000029802,
+        "max": 3472.2000000029802
+      },
+      "unreported": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      }
+    },
+    "handoffMs": {
+      "primary": {
+        "count": 4,
+        "mean": 672.125,
+        "p50": 646.0999999940395,
+        "p95": 855.5,
+        "max": 855.5
+      },
+      "external": {
+        "count": 4,
+        "mean": 525.1750000044703,
+        "p50": 513.5,
+        "p95": 558.6000000089407,
+        "max": 558.6000000089407
+      }
+    },
+    "nativeObservedIntervals": {
+      "primary": {
+        "ackToFirstFrameMs": {
+          "count": 5,
+          "mean": 99.2,
+          "p50": 24,
+          "p95": 266,
+          "max": 266
+        },
+        "preparingToFirstFrameMs": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        }
+      },
+      "external": {
+        "ackToFirstFrameMs": {
+          "count": 5,
+          "mean": 15.4,
+          "p50": 16,
+          "p95": 19,
+          "max": 19
+        },
+        "preparingToFirstFrameMs": {
+          "count": 0,
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "max": null
+        }
+      }
+    },
+    "serviceStagesMs": {
+      "context_ms": {
+        "count": 5,
+        "mean": 2.770126600000822,
+        "p50": 0.003942999995842911,
+        "p95": 13.835268000008227,
+        "max": 13.835268000008227
+      },
+      "provider_ms": {
+        "count": 5,
+        "mean": 2373.8220901999966,
+        "p50": 2019.1284409999923,
+        "p95": 3329.323995999999,
+        "max": 3329.323995999999
+      },
+      "validation_ms": {
+        "count": 5,
+        "mean": 0.012324799990892643,
+        "p50": 0.012034999997467821,
+        "p95": 0.013936999977204323,
+        "max": 0.013936999977204323
+      },
+      "endpoint_ms": {
+        "count": 5,
+        "mean": 2376.631418999989,
+        "p50": 2019.1742509999813,
+        "p95": 3343.2077309999786,
+        "max": 3343.2077309999786
+      }
+    },
+    "poseStagesMs": {
+      "total_ms": {
+        "count": 3,
+        "mean": 8215.733333329359,
+        "p50": 8524.39999999106,
+        "p95": 8640,
+        "max": 8640
+      },
+      "submit_request_ms": {
+        "count": 3,
+        "mean": 788.1666666666666,
+        "p50": 754,
+        "p95": 1022.5,
+        "max": 1022.5
+      },
+      "poll_request_ms": {
+        "count": 3,
+        "mean": 4954.733333334327,
+        "p50": 4900.100000023842,
+        "p95": 5241.5999999940395,
+        "max": 5241.5999999940395
+      },
+      "poll_wait_ms": {
+        "count": 3,
+        "mean": 2472.433333322406,
+        "p50": 2869.9999999701977,
+        "p95": 2894.0999999940395,
+        "max": 2894.0999999940395
+      },
+      "retry_wait_ms": {
+        "count": 3,
+        "mean": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "proxy_upstream_submit_ms": {
+        "count": 3,
+        "mean": 708.217784999988,
+        "p50": 681.2139479999928,
+        "p95": 939.8998629999937,
+        "max": 939.8998629999937
+      },
+      "proxy_upstream_status_ms": {
+        "count": 3,
+        "mean": 2724.6047303333303,
+        "p50": 2684.289712000009,
+        "p95": 3003.9876630000035,
+        "max": 3003.9876630000035
+      },
+      "proxy_download_ms": {
+        "count": 3,
+        "mean": 1542.5051506666612,
+        "p50": 1535.1517809999962,
+        "p95": 1575.5116089999888,
+        "max": 1575.5116089999888
+      },
+      "proxy_validation_persist_ms": {
+        "count": 3,
+        "mean": 361.1373749999984,
+        "p50": 371.4736270000003,
+        "p95": 394.4592459999967,
+        "max": 394.4592459999967
+      }
+    },
+    "limitations": [
+      "This gate checks internal sample consistency, NOT production approval, speedup, fluidity or linguistic accuracy.",
+      "Service authenticity depends on the documented harness and runtime; JSON declarations alone do not prove it.",
+      "ASR is injected. Admission-to-frame is not acoustic speech-to-frame.",
+      "Native events are browser-received callbacks, not GPU presentation timestamps.",
+      "ACK/preparing-to-first-frame uses observed wall-clock callbacks and includes scheduling, not isolated Unity CPU compute.",
+      "Browser-memory replay has no new service call; older unlabeled missing pose spans remain unknown, never zero.",
+      "Handoff includes queue/idle and scheduling; samples must be segmented before comparison.",
+      "Service and pose timings overlap and do not separate internal worker queue/compute."
+    ]
+  },
+  "limitations": [
+    "Controlled ASR, not a physical microphone test.",
+    "One small repeated-phrase run per version; variable GPT, cache, polling and clip lengths. Not a controlled speedup A/B.",
+    "No transcript, user ID, session ID, raw event, cookie or credential is exported."
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "post-audio-change-real-signaling-smoke-not-speedup-approval",
+  "source": "real-services-1793047264409",
+  "result": "PASS",
+  "batches": 3,
+  "sourceWords": 21,
+  "elapsedMs": 57919,
+  "recognition": "controlled pt-BR transcripts; not physical speech",
+  "runtime": "real GPT/NeoTalk/Unity with native Document PiP; both outputs visible",
+  "runtimeImages": {
+    "platform": "sha256:6eba1bb4ddb2c08f4c4adfdc5c8a1d5317e22bb5f212123f4aad8ec6f40535b1",
+    "api": "sha256:1079556de6866e294e8617ed1206f4e18a910d8d01e9fe87ee149e8c3028911b",
+    "avatar": "sha256:0d1428f3d8f2f516ff5184da7f1e5a952e3b2e84dd2a514eb23429c3899a3975"
+  },
+  "harnessSha256": "6d92bfd7670c7ada8b0b264e663cbc5276050e5c92f6ad63c270ff26a91a46b1",
+  "completeExecutions": { "primary": 3, "external": 3 },
+  "missing": { "primaryExecution": 0, "externalExecution": 0, "serverTimings": 0, "requiredPoseTimings": 0 },
+  "outcomes": { "complete": 3, "error": 0, "skipped": 0, "cancelled": 0, "pending": 0 },
+  "pressure": { "capturePauses": 0, "rejectedSourceWords": 0, "rejectedAudioChunks": 0 },
+  "runtimeResets": 0,
+  "limitations": ["Not production, acoustic, browser-matrix, fluency or long-run approval.", "Do not compare elapsed times across different cache/workload/visibility scenarios as speedup evidence."]
+}

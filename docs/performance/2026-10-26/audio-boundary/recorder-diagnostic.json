@@ -1,0 +1,28 @@
+{
+  "kind": "synthetic-recorder-boundary-diagnostic",
+  "result": "DIAGNOSTIC_COMPLETE",
+  "limitations": [
+    "Not physical speech or platform end-to-end QA. No human audio captured."
+  ],
+  "browser": "155.0.4283.62",
+  "samples": {
+    "immediate": {
+      "size": 110,
+      "type": "audio/webm;codecs=opus",
+      "decodedFrames": null,
+      "decodeError": "EncodingError"
+    },
+    "normal": {
+      "size": 60300,
+      "type": "audio/webm;codecs=opus",
+      "decodedFrames": 201600,
+      "decodeError": null
+    }
+  },
+  "provider": {
+    "status": 400,
+    "code": "invalid_value",
+    "type": "invalid_request_error",
+    "param": "file"
+  }
+}
