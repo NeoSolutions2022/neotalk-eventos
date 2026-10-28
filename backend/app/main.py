@@ -65,6 +65,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
+from .analytics import AnalyticsCors, router as analytics_router
+app.add_middleware(AnalyticsCors)
+app.include_router(analytics_router)
 
 
 @app.middleware("http")
