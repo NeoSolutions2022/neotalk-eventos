@@ -23,6 +23,7 @@ services:
     environment:
       DATABASE_URL: postgresql://neotalk:${POSTGRES_PASSWORD}@postgres:5432/neotalk
       CORS_ORIGINS: ${APP_PUBLIC_ORIGIN},${LEAD_FORM_ORIGIN:-https://neotalk.app}
+      ANALYTICS_FORM_ORIGINS: ${ANALYTICS_FORM_ORIGINS:-https://neotalk.app}
       NEOTALK_API_KEY: ${NEOTALK_API_KEY}
       NEOTALK_API_BASE_URL: ${NEOTALK_API_BASE_URL:-https://infra-neotalk-api.k3p3ex.easypanel.host}
       NEOTALK_API_TIMEOUT_SECONDS: ${NEOTALK_API_TIMEOUT_SECONDS:-30}

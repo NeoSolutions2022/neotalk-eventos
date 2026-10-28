@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["next-env.d.ts", "app/**/*.ts", "app/**/*.tsx"],
+  "exclude": ["node_modules", "mobile-offline", "worker", "db"],
+  "compilerOptions": { "incremental": false }
+}

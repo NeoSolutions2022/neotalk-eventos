@@ -198,15 +198,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
     async with pool.acquire() as connection:
         await connection.execute(SCHEMA_SQL)
+        from .analytics import SCHEMA as ANALYTICS_SCHEMA
+        await connection.execute(ANALYTICS_SCHEMA)
         from .auth import ensure_bootstrap_admin
         await ensure_bootstrap_admin(connection)
     app.state.db = pool
+    # Optional telemetry cannot occupy the whole live-room database pool.
+    app.state.analytics_ingest_slots = asyncio.Semaphore(2)
     reaper = asyncio.create_task(reap_stale_rooms(pool))
-    yield
-    reaper.cancel()
-    with suppress(asyncio.CancelledError):
-        await reaper
-    await pool.close()
+    from .analytics import retention_loop
+    analytics_retention = asyncio.create_task(retention_loop(pool))
+    try:
+        yield
+    finally:
+        for task in (reaper, analytics_retention):
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        await pool.close()
 
 
 def get_pool(request: Request) -> asyncpg.Pool:

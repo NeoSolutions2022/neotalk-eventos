@@ -5,10 +5,11 @@ import LiveRoom from "./LiveRoom";
 import Rooms from "./Rooms";
 import QualityAdmin from "./QualityAdmin";
 import VideoStudio from "./VideoStudio";
+import AnalyticsAdmin from "./AnalyticsAdmin";
 import { isNonBlockingAvatarError } from "./avatarMessages";
 import { ApiError, SessionUser, apiRequest, authenticate, consumeLeadAccess, loadSession, quickAccess, setSession } from "./apiClient";
 
-export type View = "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "videos" | "plugins" | "account" | "login" | "register" | "handoff";
+export type View = "analytics" | "dashboard" | "instances" | "packages" | "billing" | "quality" | "studio" | "videos" | "plugins" | "account" | "login" | "register" | "handoff";
 type AvatarId = "lia" | "asuna" | "elia";
 
 const avatarWidgetBase = process.env.NEXT_PUBLIC_AVATAR_WIDGET_URL || "https://infra-avatar3d-oficial.k3p3ex.easypanel.host/widget";
@@ -21,6 +22,7 @@ const baseNav = [
 ];
 
 const viewPaths: Record<View, string> = {
+  analytics: "/analytics",
   dashboard: "/dashboard", instances: "/salas", packages: "/uso", billing: "/pagamento",
   quality: "/qualidade", studio: "/salas/ao-vivo", login: "/login", register: "/cadastro",
   videos: "/videos", plugins: "/plugins", account: "/conta",
@@ -45,7 +47,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
   useEffect(() => {
     if (view === "login" || view === "register" || view === "handoff") return;
     loadSession().then((activeUser) => {
-      if (["dashboard", "packages", "quality", "billing"].includes(view) && activeUser.role !== "admin") {
+      if (["analytics", "dashboard", "packages", "quality", "billing"].includes(view) && activeUser.role !== "admin") {
         window.location.replace("/salas");
         return;
       }
@@ -101,6 +103,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
       { id: "packages" as View, icon: "clock" as IconName, label: "Pacotes e uso", href: "/uso" },
       { id: "billing" as View, icon: "card" as IconName, label: "Pagamento", href: "/pagamento" },
       { id: "quality" as View, icon: "sparkles" as IconName, label: "Qualidade", href: "/qualidade" },
+      { id: "analytics" as View, icon: "clock" as IconName, label: "Analytics", href: "/analytics" },
     ] : []),
   ];
   const initials = user.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
@@ -144,6 +147,7 @@ export default function PlatformApp({ initialView = "dashboard" }: { initialView
           {view === "packages" && <Packages onBuy={() => goTo("billing")} />}
           {view === "billing" && <Billing onSave={() => showToast("Dados de pagamento atualizados")} />}
           {view === "quality" && <QualityAdmin showToast={showToast} />}
+          {view === "analytics" && user.role === "admin" && <AnalyticsAdmin />}
           {view === "videos" && <VideoStudio showToast={showToast} />}
           {view === "studio" && <LiveRoom recording={recording} setRecording={setRecording} time={time} showToast={showToast} diagnostics={user.role === "admin"} />}
           {view === "plugins" && <LockedPreview />}

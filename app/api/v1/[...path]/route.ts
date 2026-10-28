@@ -26,6 +26,12 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  if (path[0] === "analytics" && ["config", "events"].includes(path[1])) {
+    for (const name of ["access-control-request-method", "access-control-request-headers"]) {
+      const value = request.headers.get(name);
+      if (value) headers.set(name, value);
+    }
+  }
   headers.set("x-forwarded-host", incoming.host);
   headers.set("x-forwarded-proto", incoming.protocol.slice(0, -1));
 
