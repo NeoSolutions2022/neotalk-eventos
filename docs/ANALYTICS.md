@@ -1,5 +1,33 @@
 # Analytics comercial — primeira entrega do /acesso
 
+## Extensão da landing (28/10/2026)
+
+O mesmo banco, endpoints, sessão admin, limites e retenção passam a aceitar a
+landing. Migração aditiva: `analytics_events.source/release` e
+`analytics_settings.sources`. Registros existentes continuam `source=access`.
+Coleta da landing inicia desativada, independentemente do formulário.
+
+- `GET /analytics/config?source=landing`: versão `landing-analytics-v1`, sem IDs.
+- POST existente distingue a origem pela versão permitida; eventos/etapas de uma
+  origem são recusados na outra. Não há URLs, texto livre, nomes ou contatos.
+- Relatório admin aceita `source=access|landing`; padrão continua `access`.
+- Dashboard possui seletor de origem e controles independentes de ativação.
+- Landing: sessões consentidas, alcance por seção, tempo ativo, cliques de CTAs,
+  FAQ, seleções de plano/período/horas, campanhas, dispositivos, erros categóricos
+  e heatmap 20×20 por seção/dispositivo/versão (mínimo 3 sessões por célula).
+- Preferência da landing é independente da preferência do quiz. GPC/DNT prevalecem.
+- Não há união determinística das identidades entre home/formulário nem confirmação
+  de chegada ou compra a partir de clique; UTMs fixas identificam a origem no quiz.
+- Não há GeoIP, gravação de sessão ou novo serviço de banco/analytics.
+
+Implantar API/admin antes do novo HTML da landing; então habilitar a origem pelo
+admin, respeitando a preferência individual. Desativar apenas `sources.landing`
+é rollback de coleta sem desligar o /acesso ou apagar histórico.
+
+Regressão SQL/API: 13 testes no PostgreSQL temporário isolado. Tracker da landing:
+`node --test tests/landing-analytics.test.mjs` no fonte da landing (17 testes).
+Não confundir testes sintéticos com visitas reais em produção.
+
 ## Arquitetura aprovada em 28/10/2026
 
 O formulário neotalk.app/acesso só coleta métricas autorizadas e envia à API da plataforma. A página /analytics usa PlatformApp, menu admin, sessão e CSRF já existentes. As tabelas analytics_events, analytics_settings e analytics_rate_limits ficam no **mesmo PostgreSQL/DATABASE_URL da plataforma**. Não criar outro banco, serviço, senha admin ou backend na HostGator.

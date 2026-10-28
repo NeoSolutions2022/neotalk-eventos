@@ -28,6 +28,60 @@ STEPS = (
     "contato",
     "sucesso",
 )
+LANDING_SECTIONS = (
+    "page",
+    "header",
+    "hero",
+    "product",
+    "how_it_works",
+    "use_cases",
+    "pricing",
+    "consumption",
+    "deaf_access",
+    "faq",
+    "final_cta",
+    "footer",
+)
+LANDING_CTAS = (
+    "header_login",
+    "header_start",
+    "mobile_login",
+    "mobile_start",
+    "hero_start",
+    "hero_how",
+    "product_platform",
+    "product_browser",
+    "product_mobile",
+    "deaf_access",
+    "footer_start",
+    "footer_contact",
+    "footer_instagram",
+    "footer_email",
+    "footer_platform",
+    "footer_discover",
+    "pricing_pro",
+    "pricing_business",
+    "pricing_enterprise",
+    "nav_product",
+    "nav_how_it_works",
+    "nav_use_cases",
+    "nav_pricing",
+    "nav_deaf_access",
+    "nav_faq",
+    "nav_top",
+    "footer_login",
+)
+LANDING_EVENTS = {
+    "landing_view": "funnel",
+    "section_view": "funnel",
+    "cta_click": "funnel",
+    "faq_open": "funnel",
+    "pricing_change": "funnel",
+    "landing_error": "errors",
+    "active_time": "engagement",
+    "scroll_depth": "engagement",
+    "heat_click": "heatmap",
+}
 EVENTS = {
     "form_view": "funnel",
     "form_start": "funnel",
@@ -62,6 +116,10 @@ CREATE TABLE IF NOT EXISTS analytics_events (
 CREATE INDEX IF NOT EXISTS analytics_events_received ON analytics_events(received_at);
 CREATE INDEX IF NOT EXISTS analytics_events_session ON analytics_events(session,occurred_at DESC);
 CREATE INDEX IF NOT EXISTS analytics_events_name_step ON analytics_events(name,step,received_at);
+ALTER TABLE analytics_settings ADD COLUMN IF NOT EXISTS sources JSONB NOT NULL DEFAULT '{"access":true,"landing":false}';
+ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS source VARCHAR(8) NOT NULL DEFAULT 'access';
+ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS release VARCHAR(40) NOT NULL DEFAULT 'access-analytics-v1';
+CREATE INDEX IF NOT EXISTS analytics_events_source_received ON analytics_events(source,received_at);
 CREATE TABLE IF NOT EXISTS analytics_rate_limits (
  key CHAR(64) PRIMARY KEY, bucket BIGINT NOT NULL, count INTEGER NOT NULL
 );
@@ -142,8 +200,8 @@ class Event(BaseModel):
     def validate_event(self):
         if (
             self.id.version != 4
-            or self.name not in EVENTS
-            or self.step not in STEPS
+            or self.name not in {**EVENTS, **LANDING_EVENTS}
+            or self.step not in (*STEPS, *LANDING_SECTIONS)
             or abs(self.at / 1000 - time.time()) > 7 * 86400
         ):
             raise ValueError("invalid event")
@@ -154,6 +212,10 @@ class Event(BaseModel):
             "form_step_complete": {"option", "options"},
             "form_validation_error": {"code"},
             "form_submit_failed": {"code"},
+            "cta_click": {"cta", "target"},
+            "faq_open": {"faq"},
+            "pricing_change": {"plan", "hours", "billing"},
+            "landing_error": {"code"},
             **{
                 n: {"action"}
                 for n in (
@@ -168,19 +230,38 @@ class Event(BaseModel):
         if set(self.props) - allowed:
             raise ValueError("unexpected event property")
         for k, v in self.props.items():
-            if k == "action":
+            if k == "cta":
+                if not isinstance(v, str) or v not in LANDING_CTAS:
+                    raise ValueError("invalid cta")
+            elif k in ("target", "plan", "billing", "faq"):
+                values = {
+                    "target": ("access", "platform", "contact", "instagram", "section"),
+                    "plan": ("pro", "business", "shared"),
+                    "billing": ("monthly", "annual"),
+                    "faq": tuple(f"faq_{i}" for i in range(1, 9)),
+                }
+                if not isinstance(v, str) or v not in values[k]:
+                    raise ValueError("invalid category")
+            elif k == "hours":
+                if type(v) is not int or v not in (5, 10, 25, 50, 100, 250, 500):
+                    raise ValueError("invalid hours")
+            elif k == "action":
                 if not isinstance(v, str) or not re.fullmatch(
                     r"(option_[0-7]|continue|back|submit|platform|instagram)", v
                 ):
                     raise ValueError("invalid action")
             elif k == "code":
                 if v not in (
-                    "nome",
-                    "email",
-                    "whatsapp",
-                    "network",
-                    "save_failed",
-                    "unknown",
+                    ("runtime", "resource", "promise")
+                    if self.name == "landing_error"
+                    else (
+                        "nome",
+                        "email",
+                        "whatsapp",
+                        "network",
+                        "save_failed",
+                        "unknown",
+                    )
                 ):
                     raise ValueError("invalid code")
             elif k == "options":
@@ -203,18 +284,30 @@ class Event(BaseModel):
             raise ValueError("missing time")
         if self.name == "scroll_depth" and "depth" not in self.props:
             raise ValueError("missing depth")
-        if (
-            "option" in self.props
-            and self.props["option"] >= (6, 8, 7, 4, 0, 0)[STEPS.index(self.step)]
+        if "option" in self.props and (
+            self.step not in STEPS
+            or self.props["option"] >= (6, 8, 7, 4, 0, 0)[STEPS.index(self.step)]
         ):
             raise ValueError("invalid choice")
+        if self.name == "cta_click" and set(self.props) != {"cta", "target"}:
+            raise ValueError("missing cta")
+        if self.name == "faq_open" and set(self.props) != {"faq"}:
+            raise ValueError("missing faq")
+        if self.name == "pricing_change" and set(self.props) != {
+            "plan",
+            "hours",
+            "billing",
+        }:
+            raise ValueError("missing pricing selection")
+        if self.name == "landing_error" and set(self.props) != {"code"}:
+            raise ValueError("missing failure category")
         return self
 
 
 class Batch(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal[1] = Field(alias="schema")
-    release: Literal["access-analytics-v1"]
+    release: Literal["access-analytics-v1", "landing-analytics-v1"]
     visitor: UUID
     session: UUID
     consent: Preferences
@@ -239,7 +332,12 @@ class Batch(BaseModel):
             for v in self.campaign.values()
         ):
             raise ValueError("invalid campaign")
-        if any(not getattr(self.consent, EVENTS[e.name]) for e in self.events):
+        landing = self.release == "landing-analytics-v1"
+        events = LANDING_EVENTS if landing else EVENTS
+        steps = LANDING_SECTIONS if landing else STEPS
+        if any(e.name not in events or e.step not in steps for e in self.events):
+            raise ValueError("invalid analytics source")
+        if any(not getattr(self.consent, events[e.name]) for e in self.events):
             raise ValueError("missing consent")
         return self
 
@@ -248,6 +346,13 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     enabled: bool
     groups: Preferences
+    sources: dict[Literal["access", "landing"], bool] | None = None
+
+    @model_validator(mode="after")
+    def validate_sources(self):
+        if self.sources is not None and set(self.sources) != {"access", "landing"}:
+            raise ValueError("missing source setting")
+        return self
 
 
 def decode(value):
@@ -256,13 +361,14 @@ def decode(value):
 
 async def configuration(connection) -> dict:
     row = await connection.fetchrow(
-        "SELECT enabled,groups,rate_secret FROM analytics_settings WHERE id=TRUE",
+        "SELECT enabled,groups,rate_secret,sources FROM analytics_settings WHERE id=TRUE",
         timeout=2,
     )
     return {
         "enabled": row["enabled"],
         "groups": decode(row["groups"]),
         "rate_secret": row["rate_secret"],
+        "sources": decode(row["sources"]),
     }
 
 
@@ -313,7 +419,12 @@ router = APIRouter()
 
 
 @router.get("/api/v1/analytics/config")
-async def public_config(request: Request, response: Response, pool=Depends(get_pool)):
+async def public_config(
+    request: Request,
+    response: Response,
+    source: Literal["access", "landing"] = "access",
+    pool=Depends(get_pool),
+):
     response.headers["Cache-Control"] = "no-store"
     if request.headers.get("origin") not in origins():
         raise HTTPException(403, "Analytics origin not allowed")
@@ -324,12 +435,12 @@ async def public_config(request: Request, response: Response, pool=Depends(get_p
         return {
             "enabled": False,
             "groups": dict.fromkeys(GROUPS, False),
-            "release": "access-analytics-v1",
+            "release": f"{source}-analytics-v1",
         }
     return {
-        "enabled": cfg["enabled"],
+        "enabled": cfg["enabled"] and cfg["sources"].get(source, False),
         "groups": cfg["groups"],
-        "release": "access-analytics-v1",
+        "release": f"{source}-analytics-v1",
     }
 
 
@@ -367,10 +478,12 @@ async def _ingest(request: Request, pool):
         payload = Batch.model_validate_json(raw)
     except (ValidationError, ValueError, TypeError):
         raise HTTPException(400, "Invalid analytics payload") from None
+    source = "landing" if payload.release == "landing-analytics-v1" else "access"
+    event_groups = LANDING_EVENTS if source == "landing" else EVENTS
     try:
         async with pool.acquire(timeout=1) as c:
             cfg = await configuration(c)
-            if not cfg["enabled"]:
+            if not cfg["enabled"] or not cfg["sources"].get(source, False):
                 return {"accepted": 0, "disabled": True}
             await rate_limit(c, request, cfg["rate_secret"], payload.session)
             campaign = (
@@ -379,14 +492,16 @@ async def _ingest(request: Request, pool):
                 else {}
             )
             events = [
-                e for e in payload.events if cfg["groups"].get(EVENTS[e.name], False)
+                e
+                for e in payload.events
+                if cfg["groups"].get(event_groups[e.name], False)
             ]
             async with c.transaction():
                 accepted = 0
                 for e in events:
                     result = await c.execute(
-                        """INSERT INTO analytics_events(id,occurred_at,visitor,session,name,step,device,language,campaign,props)
-                        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb) ON CONFLICT(id) DO NOTHING""",
+                        """INSERT INTO analytics_events(id,occurred_at,visitor,session,name,step,device,language,campaign,props,source,release)
+                        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12) ON CONFLICT(id) DO NOTHING""",
                         e.id,
                         datetime.fromtimestamp(e.at / 1000, timezone.utc),
                         payload.visitor,
@@ -397,6 +512,8 @@ async def _ingest(request: Request, pool):
                         payload.language,
                         json.dumps(campaign),
                         json.dumps(e.props),
+                        source,
+                        payload.release,
                         timeout=2,
                     )
                     accepted += int(result == "INSERT 0 1")
@@ -411,7 +528,11 @@ async def _ingest(request: Request, pool):
 async def settings(user: CurrentUser = Depends(admin_user), pool=Depends(get_pool)):
     async with pool.acquire(timeout=1) as c:
         cfg = await configuration(c)
-    return {"enabled": cfg["enabled"], "groups": cfg["groups"]}
+    return {
+        "enabled": cfg["enabled"],
+        "groups": cfg["groups"],
+        "sources": cfg["sources"],
+    }
 
 
 @router.put("/api/v1/admin/analytics/settings")
@@ -420,20 +541,21 @@ async def update_settings(
 ):
     async with pool.acquire(timeout=1) as c:
         await c.execute(
-            "UPDATE analytics_settings SET enabled=$1,groups=$2::jsonb,updated_at=now() WHERE id=TRUE",
+            "UPDATE analytics_settings SET enabled=$1,groups=$2::jsonb,sources=coalesce($3::jsonb,sources),updated_at=now() WHERE id=TRUE",
             payload.enabled,
             json.dumps(payload.groups.model_dump()),
+            json.dumps(payload.sources) if payload.sources is not None else None,
             timeout=2,
         )
     return {"saved": True}
 
 
 REPORT_SQL = """
-WITH raw AS MATERIALIZED (SELECT * FROM analytics_events WHERE received_at>=now()-make_interval(days=>$1)),
+WITH raw AS MATERIALIZED (SELECT * FROM analytics_events WHERE source=$2 AND received_at>=now()-make_interval(days=>$1)),
 totals AS (SELECT count(*) events,count(DISTINCT visitor) visitors,count(DISTINCT session) sessions,
- count(DISTINCT session) FILTER(WHERE name IN ('form_view','form_start','form_step_view','form_step_complete','form_submit_attempt','lead_submit_accepted','success_view')) funnel_sessions FROM raw),
+ count(DISTINCT session) FILTER(WHERE name IN ('form_view','form_start','form_step_view','form_step_complete','form_submit_attempt','lead_submit_accepted','success_view','landing_view','section_view','cta_click')) funnel_sessions FROM raw),
 names AS (SELECT name,count(*) attempts,count(DISTINCT session) sessions FROM raw GROUP BY name),
-views AS (SELECT step,count(DISTINCT session) sessions FROM raw WHERE name='form_step_view' GROUP BY step),
+views AS (SELECT step,count(DISTINCT session) sessions FROM raw WHERE name IN ('form_step_view','section_view') GROUP BY step),
 completed AS (SELECT step,count(DISTINCT session) sessions FROM raw WHERE name='form_step_complete' GROUP BY step),
 active AS (SELECT step,sum((props->>'active_ms')::bigint) ms,count(DISTINCT session) sessions FROM raw WHERE name='active_time' GROUP BY step),
 journeys AS (SELECT session,max(received_at) last_seen,bool_or(name='lead_submit_accepted') accepted FROM raw
@@ -441,10 +563,14 @@ journeys AS (SELECT session,max(received_at) last_seen,bool_or(name='lead_submit
 states AS (SELECT *,CASE WHEN accepted THEN 'accepted' WHEN last_seen>now()-interval '30 minutes' THEN 'in_progress' WHEN last_seen>now()-interval '24 hours' THEN 'provisional' ELSE 'consolidated' END state FROM journeys),
 latest_step AS (SELECT DISTINCT ON(session) session,step FROM raw WHERE name='form_step_view' ORDER BY session,occurred_at DESC,received_at DESC,id DESC),
 last_steps AS (SELECT coalesce(l.step,'unknown') step,count(*) count FROM states s LEFT JOIN latest_step l USING(session) WHERE state IN ('provisional','consolidated') GROUP BY l.step),
-heat AS (SELECT step,device,(props->>'x')::int x,(props->>'y')::int y,count(*) clicks,count(DISTINCT session) sessions FROM raw WHERE name='heat_click' GROUP BY step,device,x,y HAVING count(DISTINCT session)>=3),
+heat AS (SELECT step,device,release,(props->>'x')::int x,(props->>'y')::int y,count(*) clicks,count(DISTINCT session) sessions FROM raw WHERE name='heat_click' GROUP BY step,device,release,x,y HAVING count(DISTINCT session)>=3),
+releases AS (SELECT DISTINCT release FROM raw ORDER BY release),
+ctas AS (SELECT props->>'cta' cta,props->>'target' target,count(*) clicks,count(DISTINCT session) sessions FROM raw WHERE name='cta_click' GROUP BY cta,target),
+faqs AS (SELECT props->>'faq' faq,count(*) opens,count(DISTINCT session) sessions FROM raw WHERE name='faq_open' GROUP BY faq),
+pricing AS (SELECT props->>'plan' plan,props->>'billing' billing,(props->>'hours')::int hours,count(*) changes,count(DISTINCT session) sessions FROM raw WHERE name='pricing_change' GROUP BY plan,billing,hours HAVING count(DISTINCT session)>=3),
 segments AS (SELECT device,language,count(DISTINCT session) sessions FROM raw GROUP BY device,language HAVING count(DISTINCT session)>=3),
 campaigns AS (SELECT campaign,count(DISTINCT session) sessions FROM raw WHERE campaign!='{}'::jsonb GROUP BY campaign HAVING count(DISTINCT session)>=3),
-errors AS (SELECT name,props->>'code' code,count(*) attempts FROM raw WHERE name IN ('form_validation_error','form_submit_failed') GROUP BY name,code),
+errors AS (SELECT name,props->>'code' code,count(*) attempts FROM raw WHERE name IN ('form_validation_error','form_submit_failed','landing_error') GROUP BY name,code),
 choices AS (SELECT DISTINCT ON(session,step) * FROM raw WHERE name='form_step_complete' ORDER BY session,step,occurred_at DESC,received_at DESC,id DESC),
 options AS (SELECT step,(props->>'option')::int option,count(DISTINCT session) sessions FROM choices WHERE props ? 'option' GROUP BY step,option HAVING count(DISTINCT session)>=3
  UNION ALL SELECT step,o.value::int option,count(DISTINCT session) sessions FROM choices CROSS JOIN LATERAL jsonb_array_elements_text(props->'options') o GROUP BY step,o.value HAVING count(DISTINCT session)>=3),
@@ -457,6 +583,8 @@ SELECT jsonb_build_object(
  'segments',(SELECT coalesce(jsonb_agg(v),'[]') FROM segments v),'campaigns',(SELECT coalesce(jsonb_agg(v),'[]') FROM campaigns v),
  'errors',(SELECT coalesce(jsonb_agg(v),'[]') FROM errors v),'options',(SELECT coalesce(jsonb_agg(v),'[]') FROM options v),
  'scroll',(SELECT coalesce(jsonb_agg(v),'[]') FROM scroll v),'daily',(SELECT coalesce(jsonb_agg(v),'[]') FROM daily v),
+ 'ctas',(SELECT coalesce(jsonb_agg(v),'[]') FROM ctas v),'faqs',(SELECT coalesce(jsonb_agg(v),'[]') FROM faqs v),
+ 'pricing',(SELECT coalesce(jsonb_agg(v),'[]') FROM pricing v),'releases',(SELECT coalesce(jsonb_agg(release),'[]') FROM releases),
  'last_steps',(SELECT coalesce(jsonb_object_agg(step,count),'{}') FROM last_steps),
  'abandonment',jsonb_build_object('accepted',(SELECT count(*) FROM states WHERE state='accepted'),
  'in_progress',(SELECT count(*) FROM states WHERE state='in_progress'),'provisional',(SELECT count(*) FROM states WHERE state='provisional'),
@@ -468,6 +596,7 @@ SELECT jsonb_build_object(
 async def report(
     response: Response,
     days: int = 7,
+    source: Literal["access", "landing"] = "access",
     user: CurrentUser = Depends(admin_user),
     pool=Depends(get_pool),
 ):
@@ -476,12 +605,13 @@ async def report(
     response.headers["Cache-Control"] = "no-store"
     try:
         async with pool.acquire(timeout=1) as c:
-            data = decode(await c.fetchval(REPORT_SQL, days, timeout=3))
+            data = decode(await c.fetchval(REPORT_SQL, days, source, timeout=3))
     except (asyncio.TimeoutError, asyncpg.PostgresError):
         raise HTTPException(503, "Analytics report temporarily unavailable") from None
     return {
         **data,
         "days": days,
+        "source": source,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "minimum_group": 3,
         "location": "unknown",
