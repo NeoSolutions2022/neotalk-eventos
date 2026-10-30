@@ -102,7 +102,9 @@ test("keeps live capture, agent, quality lab, persistence and Docker services co
   assert.match(liveRoom, /toggleMicrophone/);
   assert.match(liveRoom, /track\.onended/);
   assert.match(liveRoom, /recorder\.onerror/);
-  assert.match(liveRoom, /LIVE_TRANSCRIPTION_BACKLOG = 6/);
+  assert.match(liveRoom, /LIVE_TRANSCRIPTION_BACKLOG_WARNING = 6/);
+  assert.doesNotMatch(liveRoom, /Microfone pausado por acúmulo/);
+  assert.match(liveRoom, /RecognitionRecovery/);
   assert.match(liveRoom, /visibilitychange/);
   assert.match(liveRoom, /AbortSignal\.timeout\(10000\)/);
   assert.match(liveRoom, /Microfone mutado · mantendo a tradução em loop/);

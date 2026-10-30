@@ -4,7 +4,32 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 const source = await readFile(new URL('../app/liveResilience.ts', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { LiveSessionScope, OrderedTranscriptBuffer, retryLiveRequest, isTransientLiveFailure } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+const { LiveSessionScope, OrderedTranscriptBuffer, RecognitionRecovery, retryLiveRequest, isTransientLiveFailure } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+
+test('a silent stuck recognition service restarts once, then falls back', () => {
+  const recovery = new RecognitionRecovery(0);
+  assert.equal(recovery.check(29999), 'wait');
+  assert.equal(recovery.check(30000), 'restart');
+  assert.equal(recovery.check(30001), 'wait');
+  assert.equal(recovery.check(60000), 'fallback');
+});
+
+test('recognition results and normal no-speech responses reset the stall budget', () => {
+  const recovery = new RecognitionRecovery(0);
+  assert.equal(recovery.check(30000), 'restart');
+  recovery.progress(35000);
+  assert.equal(recovery.check(60000), 'wait');
+  assert.equal(recovery.check(65000), 'restart');
+});
+
+test('recognition start exceptions have a bounded retry budget', () => {
+  const recovery = new RecognitionRecovery(0);
+  assert.equal(recovery.startFailed(), false);
+  assert.equal(recovery.startFailed(), false);
+  assert.equal(recovery.startFailed(), true);
+  recovery.progress(100);
+  assert.equal(recovery.startFailed(), false);
+});
 
 test('starting/ending rooms invalidates every previous async session', () => {
   const scope = new LiveSessionScope();
