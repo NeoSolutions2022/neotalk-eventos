@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import asyncpg
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import expire_stale_rooms, get_pool, lifespan
 from .dataset_pdf import build_dataset_pdf
+from .dataset_gaps import record_missing_terms, router as dataset_gaps_router
 from .auth import (
     COOKIE_NAME, CurrentUser, admin_csrf, admin_user, create_session, csrf_user,
     current_user, enforce_rate_limit, hash_password, normalize_email, normalize_phone,
@@ -42,6 +43,7 @@ from .services import (
     sync_pose_words,
     transcribe_audio,
     translate_to_glosses,
+    NoValidGlosses,
 )
 
 def record_dict(record: asyncpg.Record) -> dict:
@@ -58,6 +60,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.include_router(dataset_gaps_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
@@ -380,7 +383,7 @@ async def download_pose_words_pdf(pool: asyncpg.Pool = Depends(get_pool), _: Cur
 
 
 @app.post("/api/v1/agent/translate")
-async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
+async def agent_translate(payload: AgentTranslateIn, background_tasks: BackgroundTasks, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
     if payload.batch_id and not await pool.fetchval(
         "SELECT b.id FROM translation_batches b JOIN rooms r ON r.id=b.room_id WHERE b.id=$1 AND (r.user_id=$2 OR $3='admin')",
         payload.batch_id, user.id, user.role,
@@ -391,11 +394,16 @@ async def agent_translate(payload: AgentTranslateIn, pool: asyncpg.Pool = Depend
     except HTTPException as exception:
         if exception.status_code != status.HTTP_422_UNPROCESSABLE_ENTITY:
             raise
+        if isinstance(exception, NoValidGlosses):
+            background_tasks.add_task(record_missing_terms, pool, exception.missing_concepts,
+                                      str(payload.batch_id or exception.response_id or ""), "live")
         return {
             "gloss_text": "",
             "skipped": True,
             "reason": str(exception.detail),
         }
+    background_tasks.add_task(record_missing_terms, pool, result.get("missing_concepts", []),
+                              str(payload.batch_id or result.get("openai_response_id") or ""), "live")
     if payload.batch_id:
         await pool.execute(
             """
@@ -420,8 +428,10 @@ async def agent_transcribe(request: Request, _: CurrentUser = Depends(csrf_user)
 
 
 @app.post("/api/v1/admin/quality-runs", status_code=status.HTTP_201_CREATED)
-async def create_quality_run(payload: QualityRunCreate, pool: asyncpg.Pool = Depends(get_pool), _: CurrentUser = Depends(admin_csrf)) -> dict:
+async def create_quality_run(payload: QualityRunCreate, background_tasks: BackgroundTasks, pool: asyncpg.Pool = Depends(get_pool), _: CurrentUser = Depends(admin_csrf)) -> dict:
     translation = await translate_to_glosses(pool, payload.text)
+    background_tasks.add_task(record_missing_terms, pool, translation.get("missing_concepts", []),
+                              str(translation.get("openai_response_id") or ""), "quality")
     try:
         video_task_id = await submit_video(translation["gloss_text"])
         run_status = "video_processing"

@@ -30,6 +30,27 @@ export class OrderedTranscriptBuffer {
   }
 }
 
+// A successful start() call is not evidence of transcription progress. Some
+// engines accept it while their speech service remains wedged. Only results or
+// an explicit no-speech response reset the recovery budget.
+export class RecognitionRecovery {
+  private progressAt: number;
+  private failures = 0;
+  private stalls = 0;
+  constructor(now: number) { this.progressAt = now; }
+  progress(now: number) {
+    this.progressAt = now;
+    this.failures = 0;
+    this.stalls = 0;
+  }
+  startFailed() { return ++this.failures >= 3; }
+  check(now: number): "wait" | "restart" | "fallback" {
+    if (now - this.progressAt < 30000) return "wait";
+    this.progressAt = now;
+    return ++this.stalls >= 2 ? "fallback" : "restart";
+  }
+}
+
 export function isTransientLiveFailure(reason: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return false;
   if (!(reason instanceof Error)) return false;

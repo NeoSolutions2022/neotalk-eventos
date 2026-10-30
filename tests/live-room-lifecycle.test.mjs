@@ -30,7 +30,7 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     useEffect(fn) { const cleanup = fn(); if (typeof cleanup === 'function') cleanups.push(cleanup); },
   };
   const cleanups = [];
-  const context = vm.createContext({ exports: {}, window, navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } },
+  const context = vm.createContext({ exports: {}, window, navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } },
     document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' }, process: { env: {} }, URL, AbortController, AbortSignal, DOMException, Blob,
     console, Error, TypeError, SyntaxError, setTimeout: setTimeoutFake, clearTimeout: window.clearTimeout, btoa: value => Buffer.from(value).toString('base64') });
   const modules = {
@@ -48,11 +48,11 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     modules[`./${name}`] = context.exports;
   }
   // Test-only exposure: no debug API is included in shipped component source.
-  const exposed = ['presentationRef', 'preparePresentationPlayers', 'togglePresentationMode', 'warmPresentationLibrary', 'playPresentationPhrase', 'notePresentationSpeech', 'finishIdleLoopPhrase', 'currentAvatarPhrase', 'externalRoomButtonRef', 'externalCloseStopsRoomRef', 'handleExternalPlayerClosed', 'nativePlaybackRef', 'avatarSupportsNativePlaybackRef', 'externalSupportsNativePlaybackRef', 'handleNativePlaybackFrame', 'finishNativePlayback', 'startLiveRoom', 'stopLiveRoom', 'enqueueBatch', 'completeActiveBatch', 'runHeartbeat', 'sendToAvatar', 'playIdleLoopPhrase', 'queueFallbackTranscription', 'startFallbackChunk', 'fallbackStreamRef', 'fallbackTranscriptionQueueRef', 'fallbackTranscriptionInFlightRef',
+  const exposed = ['recoverFallbackCapture', 'fallbackTranscriptGenerationRef', 'restartTimerRef', 'checkRecognitionHealthRef', 'fallbackCaptureGenerationRef', 'recognitionWatchdogRef', 'presentationRef', 'preparePresentationPlayers', 'togglePresentationMode', 'warmPresentationLibrary', 'playPresentationPhrase', 'notePresentationSpeech', 'finishIdleLoopPhrase', 'currentAvatarPhrase', 'externalRoomButtonRef', 'externalCloseStopsRoomRef', 'handleExternalPlayerClosed', 'nativePlaybackRef', 'avatarSupportsNativePlaybackRef', 'externalSupportsNativePlaybackRef', 'handleNativePlaybackFrame', 'finishNativePlayback', 'startLiveRoom', 'stopLiveRoom', 'enqueueBatch', 'completeActiveBatch', 'runHeartbeat', 'sendToAvatar', 'playIdleLoopPhrase', 'queueFallbackTranscription', 'startFallbackChunk', 'fallbackStreamRef', 'fallbackTranscriptionQueueRef', 'fallbackTranscriptionInFlightRef',
     'frameRef', 'externalFrameRef', 'externalWindowRef', 'embeddedAvatarReadyRef', 'externalAvatarReadyRef', 'externalSupportsSharedPoseRef',
     'avatarSupportsSharedPoseRef', 'avatarReadyRef', 'listeningRef', 'recognitionRef', 'pendingBatchesRef', 'activeBatchRef', 'agentPromisesRef',
     'agentResultsRef', 'remoteBatchIdsRef', 'desiredBatchStatusRef', 'latestPoseRef', 'recentPosesRef', 'recentPhrasesRef', 'playbackTimerRef', 'avatarPlaybackStartedRef', 'wordBufferRef', 'roomIdRef', 'sessionScopeRef', 'microphoneMutedRef', 'addTranscriptToBuffer', 'flushWordBuffer', 'toggleMicrophone', 'releaseAvatarAfterRetryFailure', 'prefetchNextBatch', 'avatarSupportsPrefetchRef', 'avatarBusyRef', 'externalRoomActionRef', 'scheduleIdleLoop', 'lastSpeechAtRef', 'idleLoopTimerRef'];
-  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, presentationError };\n  return <>`);
+  const source = sources.LiveRoom.replace('  return <>', `  globalThis.qa = { ${exposed.join(', ')}, presentationError, lastCaption, interimCaption };\n  return <>`);
   context.exports = {};
   vm.runInContext(ts.transpileModule(source, { compilerOptions }).outputText, context, { filename: 'LiveRoom.tsx' });
   const component = context.exports.default;
@@ -382,12 +382,13 @@ test('virtual long-run orchestration: 1,200 sequential phrases, bounded session 
   assert.equal(h.commands.filter(c => c.type === 'neotalk:sign').length, 1200);
   assert.equal(h.qa.recentPhrasesRef.current.length, 2); h.qa.stopLiveRoom();
 });
-test('audio overload preserves queued chunk order and gives a rate-limited presenter notice', () => {
+test('audio backlog preserves every captured chunk without muting or dropping at six', () => {
   const h = harness(); h.qa.fallbackTranscriptionInFlightRef.current = 2;
   for (let i = 0; i < 20; i++) h.qa.queueFallbackTranscription(new Blob([`${i}`]), 0);
-  assert.equal(h.qa.fallbackTranscriptionQueueRef.current.length, 6);
-  assert.deepEqual(Array.from(h.qa.fallbackTranscriptionQueueRef.current, chunk => chunk.sequence), [0, 1, 2, 3, 4, 5]);
-  assert.equal(h.toasts.filter(text => text.includes('Um trecho')).length, 1);
+  assert.equal(h.qa.fallbackTranscriptionQueueRef.current.length, 20);
+  assert.deepEqual(Array.from(h.qa.fallbackTranscriptionQueueRef.current, chunk => chunk.sequence), Array.from({length:20},(_,i)=>i));
+  assert.equal(h.qa.microphoneMutedRef.current, false);
+  assert.equal(h.toasts.length, 0);
 });
 
 test('stress: 2,000 arrivals while translation stalls must not grow the queue without bound', async () => {
@@ -397,9 +398,9 @@ test('stress: 2,000 arrivals while translation stalls must not grow the queue wi
   for (let i = 0; i < 2000; i++) h.qa.addTranscriptToBuffer(`frase numero ${i} com palavras para testar a fila agora mesmo aqui`);
   assert.ok(h.qa.pendingBatchesRef.current.length <= 72, `queue grew to ${h.qa.pendingBatchesRef.current.length}`);
   assert.ok(h.qa.pendingBatchesRef.current.reduce((sum,batch) => sum + batch.text.split(' ').length,0) <= 864);
-  assert.ok(h.qa.wordBufferRef.current.length <= 120);
+  assert.equal(h.qa.wordBufferRef.current.length + h.qa.pendingBatchesRef.current.reduce((sum,batch)=>sum+batch.text.split(' ').length,0), 24000, 'all spoken words remain queued as text, not thousands of jobs');
   assert.ok(h.qa.agentPromisesRef.current.size <= 2);
-  assert.equal(h.qa.microphoneMutedRef.current, true);
+  assert.equal(h.qa.microphoneMutedRef.current, false);
   assert.equal(h.recording, true);
   h.qa.stopLiveRoom(); held.resolve({ gloss_text: 'TESTE' }); await flush();
   assert.equal(h.commands.some(command => command.type === 'neotalk:sign'), false);
@@ -413,13 +414,12 @@ test('stress: slow avatar drains every admitted burst in order without resetting
   h.external(); await h.qa.startLiveRoom();
   const admitted = [];
   for (let i = 0; i < 2000; i++) {
-    if (h.qa.microphoneMutedRef.current) break; // real recognition callback stops admission
     const text = `frase ${i} com doze palavras de teste para esta fila agora mesmo`;
     admitted.push(...text.split(' ')); h.qa.addTranscriptToBuffer(text); await flush();
   }
-  assert.equal(h.qa.microphoneMutedRef.current, true);
+  assert.equal(h.qa.microphoneMutedRef.current, false);
   const seen = [];
-  for (let tick = 0; tick < 100; tick++) {
+  for (let tick = 0; tick < 2500; tick++) {
     const active = h.qa.activeBatchRef.current;
     if (active) { seen.push(...active.text.split(' ')); h.qa.completeActiveBatch(); }
     await flush();
@@ -559,4 +559,121 @@ test('a recorder constructor failure safely terminates the room instead of throw
   assert.equal(h.qa.listeningRef.current, false);
   assert.equal(h.track.stopped, true);
   assert.ok(h.toasts.some(text => text.includes('captura de áudio')));
+});
+
+function compatibleRecorder(h) {
+  h.track.readyState = 'live';
+  h.context.MediaRecorder = class {
+    static isTypeSupported() { return true; }
+    state = 'inactive'; mimeType = 'audio/webm';
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop?.(); }
+  };
+}
+
+test('three failed speech starts switch to compatible capture without ending room or resetting avatar', async () => {
+  const h = harness(); compatibleRecorder(h);
+  h.context.window.SpeechRecognition = class { start() { throw new Error('speech service stuck'); } abort() {} };
+  await h.qa.startLiveRoom();
+  for (let i = 0; i < 3; i++) {
+    const id = h.qa.restartTimerRef.current;
+    assert.ok(id); h.timers.get(id).fn(); await flush();
+  }
+  assert.equal(h.qa.recognitionRef.current, null);
+  assert.ok(h.qa.fallbackStreamRef.current);
+  assert.equal(h.recording, true);
+  assert.equal(h.calls.some(c=>c.path.endsWith('/finish')), false);
+  assert.equal(h.commands.some(c=>c.type === 'neotalk:set-avatar'), false);
+  h.qa.stopLiveRoom();
+});
+
+test('hidden platform still recovers a stalled speech engine while mini-player is open', async () => {
+  const h = harness(); compatibleRecorder(h); h.external();
+  let now = 0;
+  h.context.Date = class extends Date { static now() { return now; } };
+  await h.qa.startLiveRoom();
+  h.context.document.visibilityState = 'hidden';
+  now = 30000; h.qa.checkRecognitionHealthRef.current();
+  const restart = h.qa.restartTimerRef.current;
+  h.timers.get(restart).fn(); // start succeeds, but the service emits no results
+  now = 60000; h.qa.checkRecognitionHealthRef.current(); await flush();
+  assert.equal(h.qa.recognitionRef.current, null);
+  assert.ok(h.qa.fallbackStreamRef.current);
+  assert.equal(h.recording, true);
+  h.qa.stopLiveRoom();
+});
+
+test('captions and words arriving after a full animation queue are still accepted', async () => {
+  const held = deferred();
+  const h = harness(async path => path === '/agent/translate' ? held.promise : {id:'qa'});
+  await h.qa.startLiveRoom();
+  for (let i = 0; i < 90; i++) h.qa.addTranscriptToBuffer('um dois três quatro cinco seis sete oito nove dez onze doze');
+  const before = h.qa.wordBufferRef.current.length;
+  h.qa.recognitionRef.current.onresult({resultIndex:0,results:{length:1,0:{isFinal:true,0:{transcript:'E continuo falando agora.'}}}});
+  h.render();
+  assert.equal(h.context.qa.lastCaption, 'E continuo falando agora.');
+  assert.equal(h.qa.wordBufferRef.current.length, before+4);
+  assert.equal(h.qa.microphoneMutedRef.current, false);
+  h.qa.stopLiveRoom(); held.resolve({gloss_text:'TESTE'}); await flush();
+});
+
+test('twenty captured audio chunks drain in order with only two transcription requests active', async () => {
+  const requests = [];
+  const h = harness(async (path, options) => {
+    if (path === '/agent/translate') return {gloss_text:JSON.parse(options.body).text.toUpperCase()};
+    if (path !== '/agent/transcribe') return {id:'qa'};
+    const job = deferred(); requests.push(job); return job.promise;
+  });
+  h.qa.listeningRef.current = true;
+  for (let i=0;i<20;i++) h.qa.queueFallbackTranscription(new Blob([`${i}`]),0);
+  assert.equal(requests.length,2);
+  assert.equal(h.qa.fallbackTranscriptionQueueRef.current.length,18);
+  for (let i=0;i<20;i+=2) {
+    requests[i+1].resolve({text:`palavra${i+1}`}); await flush();
+    requests[i].resolve({text:`palavra${i}`}); await flush();
+    assert.ok(h.qa.fallbackTranscriptionInFlightRef.current<=2);
+  }
+  const words = [...(h.qa.activeBatchRef.current?.text.split(' ')||[]),
+    ...h.qa.pendingBatchesRef.current.flatMap(b=>b.text.split(' ')), ...h.qa.wordBufferRef.current];
+  assert.deepEqual(Array.from(words),Array.from({length:20},(_,i)=>`palavra${i}`));
+  assert.equal(h.qa.fallbackTranscriptionInFlightRef.current,0);
+  assert.equal(h.qa.microphoneMutedRef.current,false);
+  h.qa.stopLiveRoom();
+});
+
+test('reconnecting the recorder preserves already captured audio requests and their generation', async () => {
+  const jobs = [];
+  const h = harness(async path => {
+    if (path !== '/agent/transcribe') return {id:'qa'};
+    const job = deferred(); jobs.push(job); return job.promise;
+  });
+  compatibleRecorder(h); h.qa.listeningRef.current = true;
+  for (let i=0;i<5;i++) h.qa.queueFallbackTranscription(new Blob(['audio']),0);
+  const requests = h.calls.filter(c=>c.path==='/agent/transcribe');
+  await h.qa.recoverFallbackCapture();
+  assert.equal(h.qa.fallbackTranscriptionQueueRef.current.length,3);
+  assert.equal(h.qa.fallbackTranscriptGenerationRef.current,0);
+  assert.equal(h.qa.fallbackCaptureGenerationRef.current,1);
+  assert.ok(requests.every(r=>!r.options.signal.aborted));
+  h.qa.stopLiveRoom(); jobs.forEach(j=>j.resolve({text:'antigo'})); await flush();
+  assert.equal(h.qa.wordBufferRef.current.length,0,'old audio must not leak after explicit room stop');
+});
+
+test('manual mute and resume do not orphan the pending text backlog', async () => {
+  const h = harness(async (path,options) => path === '/agent/translate'
+    ? {gloss_text:JSON.parse(options.body).text.toUpperCase()} : {id:'qa'});
+  await h.qa.startLiveRoom(); h.render();
+  const words = Array.from({length:1200},(_,i)=>`termo${i}`);
+  h.qa.addTranscriptToBuffer(words.join(' ')); await flush();
+  h.context.qa.toggleMicrophone(); h.render();
+  assert.equal(h.qa.microphoneMutedRef.current,true);
+  h.context.qa.toggleMicrophone();
+  const delivered=[];
+  for(let i=0;i<150;i++) {
+    const active=h.qa.activeBatchRef.current;
+    if(active) { delivered.push(...active.text.split(' ')); h.qa.completeActiveBatch(); }
+    await flush();
+  }
+  assert.deepEqual(delivered,words);
+  h.qa.stopLiveRoom();
 });

@@ -1,4 +1,5 @@
 import unittest
+import json
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -134,6 +135,30 @@ class TranscribeAudioTests(unittest.IsolatedAsyncioTestCase):
 class TranslateToGlossesTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         services.invalidate_agent_context_cache()
+
+    async def test_missing_concepts_use_same_request_and_do_not_pollute_glosses(self) -> None:
+        client = FakeAsyncClient([FakeResponse({"id": "gap-test", **response_payload(json.dumps({
+            "glosses": ["CASA"], "reasoning_summary": "Conceito ausente.",
+            "missing_concepts": ["ACOMPANHAR", "CASA", "ACOMPANHAR"],
+        }))})])
+        with (patch.object(services, "OPENAI_API_KEY", "test-key"),
+              patch.object(services.httpx, "AsyncClient", return_value=client)):
+            result = await services.translate_to_glosses(FakePool(), "Vou acompanhar a casa")
+        self.assertEqual(result["glosses"], ["CASA"])
+        self.assertEqual(result["missing_concepts"], ["ACOMPANHAR"])
+        self.assertEqual(len(client.requests), 1)
+        schema = client.requests[0]["text"]["format"]["schema"]
+        self.assertIn("missing_concepts", schema["required"])
+
+    async def test_invalid_output_gloss_is_not_mislabeled_as_a_missing_concept(self) -> None:
+        client = FakeAsyncClient([FakeResponse({"id": "invalid-test", **response_payload(json.dumps({
+            "glosses": ["CASA", "PALAVRA_INVENTADA"], "reasoning_summary": "", "missing_concepts": [],
+        }))})])
+        with (patch.object(services, "OPENAI_API_KEY", "test-key"),
+              patch.object(services.httpx, "AsyncClient", return_value=client)):
+            result = await services.translate_to_glosses(FakePool(), "Casa")
+        self.assertEqual(result["missing_words"], ["PALAVRA_INVENTADA"])
+        self.assertEqual(result["missing_concepts"], [])
 
     async def test_retries_incomplete_response_with_larger_budget(self) -> None:
         incomplete = FakeResponse(response_payload("{", status="incomplete", reason="max_output_tokens"))

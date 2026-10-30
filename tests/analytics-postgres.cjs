@@ -79,7 +79,7 @@ async function main() {
         "-s",
         "tests",
         "-p",
-        "test_analytics_postgres.py",
+        process.argv.includes("--dataset-gaps") ? "test_dataset_gaps_postgres.py" : "test_analytics_postgres.py",
         "-v",
       ],
       {

@@ -5,7 +5,7 @@ import type { CSSProperties } from "react";
 import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessages";
 import { ApiError, apiRequest } from "./apiClient";
 import { batchFlushDelayMs, LIVE_IDLE_LOOP_GAP_MS, matchesActivePhrase, playbackDurationMs } from "./liveTiming";
-import { LiveSessionScope, OrderedTranscriptBuffer, retryLiveRequest } from "./liveResilience";
+import { LiveSessionScope, OrderedTranscriptBuffer, RecognitionRecovery, retryLiveRequest } from "./liveResilience";
 import { playbackComplete } from "./playbackCompletion.mjs";
 import { buildPresentationPhrases, PresentationShuffle, PRESENTATION_DISCLOSURE } from "./presentationDeck";
 
@@ -44,8 +44,6 @@ const LIVE_AGENT_CONCURRENCY = 2;
 // Keep the previous 864-word maximum capacity (24 * 36), split into shorter
 // jobs so preparation cannot balloon under normal pitch backpressure.
 const LIVE_PENDING_LIMIT = 72;
-const LIVE_RESUME_LIMIT = 8;
-const LIVE_BUFFER_LIMIT = 120;
 // Full-clip Unity preparation grows with the clip length. Backpressure may
 // join fragments, but must not turn them into a much larger animation job.
 const LIVE_COMPOUND_BATCH_MAX_WORDS = LIVE_BATCH_MAX_WORDS;
@@ -58,7 +56,7 @@ const LIVE_AVATAR_POSE_LOAD_TIMEOUT_MS = 35000;
 const LIVE_AVATAR_MAX_RECOVERIES = 1;
 const LIVE_FALLBACK_CHUNK_MS = 3200;
 const LIVE_TRANSCRIPTION_CONCURRENCY = 2;
-const LIVE_TRANSCRIPTION_BACKLOG = 6;
+const LIVE_TRANSCRIPTION_BACKLOG_WARNING = 6;
 const LIVE_HEARTBEAT_INTERVAL_MS = 25000;
 const LIVE_HEARTBEAT_RETRY_MS = 5000;
 const poseKey = (phrase: string) => phrase.replace(/\s+/g, " ").trim().toUpperCase();
@@ -125,6 +123,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const fallbackStreamRef = useRef<MediaStream | null>(null);
   const fallbackChunkTimerRef = useRef<number | null>(null);
   const fallbackCaptureGenerationRef = useRef(0);
+  const fallbackTranscriptGenerationRef = useRef(0);
   const fallbackRecoveryInFlightRef = useRef(false);
   const fallbackTranscriptionQueueRef = useRef<{ blob: Blob; generation: number; sequence: number }[]>([]);
   const fallbackTranscriptionInFlightRef = useRef(0);
@@ -134,13 +133,13 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const heartbeatInFlightRef = useRef(false);
   const heartbeatFailuresRef = useRef(0);
   const restartRecognitionRef = useRef<(delay?: number) => void>(() => undefined);
+  const checkRecognitionHealthRef = useRef<() => void>(() => undefined);
   const listeningRef = useRef(false);
   const microphoneMutedRef = useRef(false);
-  const pressurePausedRef = useRef(false);
+  const translationBacklogRef = useRef(false);
   const restartTimerRef = useRef<number | null>(null);
   const recognitionWatchdogRef = useRef<number | null>(null);
   const sessionHealthTimerRef = useRef<number | null>(null);
-  const recognitionActivityAtRef = useRef(0);
   const batchTimerRef = useRef<number | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const idleLoopTimerRef = useRef<number | null>(null);
@@ -631,7 +630,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       agentPromisesRef.current.delete(batch.id);
       pendingBatchesRef.current = pendingBatchesRef.current.filter(item => item.status !== "error");
-      if (pressurePausedRef.current) flushWordBuffer(true);
+      if (translationBacklogRef.current) flushWordBuffer(true);
       refreshBatchView();
       pretranslatePendingBatches();
       dispatchNextBatch();
@@ -669,7 +668,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     avatarBusyRef.current = false;
     avatarCommandAcknowledgedRef.current = false;
     pretranslatePendingBatches();
-    if (pressurePausedRef.current) flushWordBuffer(true);
+    if (translationBacklogRef.current) flushWordBuffer(true);
     refreshBatchView();
     dispatchNextBatch();
     scheduleIdleLoop();
@@ -752,7 +751,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     setAvatarError("");
     setAvatarStatus(`${avatarNames[avatar]} seguindo com a próxima frase`);
     pretranslatePendingBatches();
-    if (pressurePausedRef.current) flushWordBuffer(true);
+    if (translationBacklogRef.current) flushWordBuffer(true);
     refreshBatchView();
     dispatchNextBatch();
     scheduleIdleLoop();
@@ -834,10 +833,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       refreshBatchView();
       return true;
     }
-    // Never evict an accepted phrase or reset Unity to catch up. At sustained
-    // overload, pause admission visibly while the existing queue keeps playing.
+    // Bound animation admission, not microphone/caption capture. Never evict
+    // an accepted phrase or reset Unity to catch up.
     if (pendingBatchesRef.current.length >= LIVE_PENDING_LIMIT) {
-      pauseCaptureForPressure();
+      noteTranslationBacklog();
       return false;
     }
     clearIdleLoopTimer();
@@ -848,21 +847,16 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     refreshBatchView();
     pretranslatePendingBatches();
     dispatchNextBatch();
-    if (pendingBatchesRef.current.length >= LIVE_PENDING_LIMIT) pauseCaptureForPressure();
+    if (pendingBatchesRef.current.length >= LIVE_PENDING_LIMIT) noteTranslationBacklog();
     return true;
   };
 
-  function pauseCaptureForPressure() {
-    if (pressurePausedRef.current) return;
-    pressurePausedRef.current = true;
-    microphoneMutedRef.current = true;
-    setMicrophoneMuted(true);
-    if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
-    try { recognitionRef.current?.abort(); } catch { /* already stopped */ }
-    // Do not abort accepted transcription requests: they still need draining.
-    fallbackStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = false; });
-    setAvatarStatus("Microfone pausado por acúmulo · os sinais continuam");
-    showToast("A sinalização acumulou trechos. O microfone foi pausado; a fila continua. Aguarde e toque em Ativar microfone.");
+  function noteTranslationBacklog() {
+    if (translationBacklogRef.current) return;
+    translationBacklogRef.current = true;
+    // Playback backpressure must never masquerade as a dead microphone. Keep
+    // receiving captions and retain pending text separately from animation jobs.
+    setBackendStatus("Tradução acumulada · captura e legendas continuam ativas");
   }
 
   const flushWordBuffer = (force = false) => {
@@ -875,10 +869,11 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     if (wordBufferRef.current.length >= LIVE_BATCH_MIN_WORDS || (force && wordBufferRef.current.length > 0)) {
       if (enqueueBatch(wordBufferRef.current.join(" "))) wordBufferRef.current.splice(0);
     }
+    if (!wordBufferRef.current.length && pendingBatchesRef.current.length < LIVE_PENDING_LIMIT) translationBacklogRef.current = false;
   };
 
   const addTranscriptToBuffer = (text: string) => {
-    if (!listeningRef.current || (microphoneMutedRef.current && !pressurePausedRef.current)) return;
+    if (!listeningRef.current || microphoneMutedRef.current) return;
     if (presentationRef.current.enabled) {
       const caption: LiveBatch = { id: ++batchIdRef.current, text, status: "done" };
       // Keep genuine captions locally; illustrative gestures are never saved
@@ -889,16 +884,10 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       return;
     }
     const words = text.split(/\s+/).filter(Boolean);
-    const remaining = LIVE_BUFFER_LIMIT - wordBufferRef.current.length;
-    wordBufferRef.current.push(...words.slice(0, remaining));
-    if (words.length > remaining) {
-      pauseCaptureForPressure();
-      setBackendStatus("Limite de transcrição atingido · parte do trecho não foi admitida");
-      if (Date.now() - transcriptionOverloadNoticeAtRef.current > 15000) {
-        transcriptionOverloadNoticeAtRef.current = Date.now();
-        showToast("A capacidade de processamento foi excedida. Parte do trecho não entrou na fila; aguarde a sinalização antes de retomar.");
-      }
-    }
+    // Text is inexpensive compared with WebGL/audio. Retain the entire spoken
+    // backlog for this room instead of truncating at 120 words or muting capture.
+    // Only the 72 animation jobs and two translation requests are materialized.
+    wordBufferRef.current.push(...words);
     while (wordBufferRef.current.length >= LIVE_BATCH_MAX_WORDS) {
       if (!enqueueBatch(wordBufferRef.current.slice(0, LIVE_BATCH_MAX_WORDS).join(" "))) break;
       wordBufferRef.current.splice(0, LIVE_BATCH_MAX_WORDS);
@@ -1203,7 +1192,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       const ordered = orderedTranscriptsRef.current;
       const signal = captureControllerRef.current.signal;
       const deliver = (text: string) => {
-        if (!listeningRef.current || (microphoneMutedRef.current && !pressurePausedRef.current) || signal.aborted || generation !== fallbackCaptureGenerationRef.current) return;
+        if (!listeningRef.current || microphoneMutedRef.current || signal.aborted || generation !== fallbackTranscriptGenerationRef.current) return;
         for (const transcript of ordered.complete(sequence, text)) {
           interruptIdleLoopForSpeech();
           setLastCaption(transcript);
@@ -1231,19 +1220,18 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   };
 
   const queueFallbackTranscription = (blob: Blob, generation: number) => {
-    if (fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG) {
-      // Do not silently drop a queued spoken passage. Discard only this new
-      // chunk and signal overload to the presenter (not inside the broadcast).
-      setBackendStatus("Rede lenta · um trecho de áudio não pôde entrar na fila");
+    if (fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG_WARNING) {
+      // This is a warning threshold, not a discard/mute threshold. Keep audio
+      // in speech order while the two transcription requests drain it.
+      setBackendStatus("Transcrição atrasada · áudio preservado na fila");
       if (Date.now() - transcriptionOverloadNoticeAtRef.current > 15000) {
         transcriptionOverloadNoticeAtRef.current = Date.now();
-        showToast("A conexão está atrasando o áudio. Um trecho não pôde ser processado.");
+        if (diagnostics) showToast("A transcrição está atrasada; o áudio continua sendo capturado e aguarda processamento.");
       }
-      return;
     }
     fallbackTranscriptionQueueRef.current.push({ blob, generation, sequence: orderedTranscriptsRef.current.issue() });
     pumpFallbackTranscriptions();
-    if (listeningRef.current && fallbackTranscriptionQueueRef.current.length >= LIVE_TRANSCRIPTION_BACKLOG) pauseCaptureForPressure();
+    // Saturation of this queue is temporary; never disable the audio track.
   };
 
   const startFallbackChunk = () => {
@@ -1251,6 +1239,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     const track = stream?.getAudioTracks()[0];
     if (!stream || !track || track.readyState !== "live" || !listeningRef.current || microphoneMutedRef.current || fallbackRecorderRef.current?.state === "recording") return;
     const generation = fallbackCaptureGenerationRef.current;
+    const transcriptGeneration = fallbackTranscriptGenerationRef.current;
     try {
     const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type)) || "";
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -1266,7 +1255,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       if (shouldProcess) window.setTimeout(startFallbackChunk, 30);
       if (!shouldProcess || !chunks.length) return;
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      queueFallbackTranscription(blob, generation);
+      queueFallbackTranscription(blob, transcriptGeneration);
     };
     recorder.onerror = () => {
       if (generation !== fallbackCaptureGenerationRef.current || !listeningRef.current || microphoneMutedRef.current) return;
@@ -1282,12 +1271,15 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     }
   };
 
-  const stopFallbackCapture = (releaseStream = true) => {
+  const stopFallbackCapture = (releaseStream = true, discardPending = true) => {
     fallbackCaptureGenerationRef.current += 1;
-    captureControllerRef.current.abort();
-    captureControllerRef.current = new AbortController();
-    orderedTranscriptsRef.current = new OrderedTranscriptBuffer();
-    fallbackTranscriptionQueueRef.current = [];
+    if (discardPending) {
+      fallbackTranscriptGenerationRef.current += 1;
+      captureControllerRef.current.abort();
+      captureControllerRef.current = new AbortController();
+      orderedTranscriptsRef.current = new OrderedTranscriptBuffer();
+      fallbackTranscriptionQueueRef.current = [];
+    }
     clearFallbackChunkTimer();
     try { if (fallbackRecorderRef.current?.state === "recording") fallbackRecorderRef.current.stop(); } catch { /* já encerrado */ }
     fallbackRecorderRef.current = null;
@@ -1312,7 +1304,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     fallbackRecoveryInFlightRef.current = true;
     const signal = sessionScopeRef.current.signal;
     try {
-      stopFallbackCapture();
+      // Replacing a failed microphone must not cancel already captured audio.
+      stopFallbackCapture(true, false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) {
         stream.getTracks().forEach((track) => track.stop());
@@ -1393,7 +1386,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     presentationRef.current.playing = false;
     sessionScopeRef.current.end();
     microphoneMutedRef.current = false;
-    pressurePausedRef.current = false;
+    translationBacklogRef.current = false;
     setMicrophoneMuted(false);
     clearIdleLoopTimer();
     clearAvatarRetryTimer();
@@ -1409,6 +1402,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       try { recognitionRef.current.abort(); } catch { /* already stopped */ }
     }
     recognitionRef.current = null;
+    restartRecognitionRef.current = () => undefined;
+    checkRecognitionHealthRef.current = () => undefined;
     stopFallbackCapture();
     clearHeartbeat();
     heartbeatFailuresRef.current = 0;
@@ -1501,7 +1496,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       await roomApi<RoomResponse>(`/rooms/${room.id}/start`, { method: "POST", signal });
       if (!sessionScopeRef.current.isCurrent(signal)) return;
       roomIdRef.current = room.id;
-      pressurePausedRef.current = false;
+      translationBacklogRef.current = false;
       roomStartedAtRef.current = Date.now();
       remoteBatchIdsRef.current.clear();
       desiredBatchStatusRef.current.clear();
@@ -1541,14 +1536,18 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = "pt-BR";
+      const recovery = new RecognitionRecovery(Date.now());
+      let switchingToFallback = false;
       const activateServerFallback = async () => {
         if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current || fallbackRecoveryInFlightRef.current) return;
         fallbackRecoveryInFlightRef.current = true;
+        switchingToFallback = true;
         if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
         if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
         recognitionWatchdogRef.current = null;
         recognition.onerror = null;
         recognition.onend = null;
+        recognition.onresult = null;
         try { recognition.abort(); } catch { /* reconhecimento já encerrado */ }
         recognitionRef.current = null;
         try {
@@ -1577,20 +1576,22 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         }
       };
       const restartRecognition = (delay = 350) => {
+        if (switchingToFallback) return;
         if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
         restartTimerRef.current = window.setTimeout(() => {
+          restartTimerRef.current = null;
           if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) return;
           try {
             recognition.start();
-            recognitionActivityAtRef.current = Date.now();
           } catch {
-            restartRecognition(900);
+            if (recovery.startFailed()) void activateServerFallback();
+            else restartRecognition(900);
           }
         }, delay);
       };
       recognition.onresult = (event) => {
         if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) return;
-        recognitionActivityAtRef.current = Date.now();
+        recovery.progress(Date.now());
         let interim = "";
         for (let index = event.resultIndex; index < event.results.length; index += 1) {
           const result = event.results[index];
@@ -1608,6 +1609,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         notePresentationSpeech(interim);
       };
       recognition.onerror = (event) => {
+        if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current) return;
+        if (event.error === "no-speech") recovery.progress(Date.now());
         if (event.error === "service-not-allowed" || event.error === "network") {
           void activateServerFallback();
         } else if (event.error === "not-allowed") {
@@ -1622,31 +1625,39 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         }
       };
       recognition.onend = () => {
-        if (!listeningRef.current || microphoneMutedRef.current) return;
+        if (!sessionScopeRef.current.isCurrent(signal) || !listeningRef.current || microphoneMutedRef.current || switchingToFallback) return;
         setAvatarStatus(idleLoopActiveRef.current ? "Loop ativo · renovando escuta" : "Renovando escuta do microfone");
         restartRecognition();
       };
 
       recognitionRef.current = recognition;
-      restartRecognitionRef.current = restartRecognition;
+      restartRecognitionRef.current = (delay = 0) => {
+        // Explicit user resume begins a new health window, unlike an automatic
+        // restart of a stalled engine.
+        recovery.progress(Date.now());
+        if (switchingToFallback) recoverFallbackCaptureRef.current();
+        else restartRecognition(delay);
+      };
       listeningRef.current = true;
       microphoneMutedRef.current = false;
-      pressurePausedRef.current = false;
+      translationBacklogRef.current = false;
       setMicrophoneMuted(false);
       setRecording(true);
       setTranscriptionEngine("browser");
-      recognitionActivityAtRef.current = Date.now();
       if (recognitionWatchdogRef.current) window.clearInterval(recognitionWatchdogRef.current);
-      recognitionWatchdogRef.current = window.setInterval(() => {
-        if (document.visibilityState === "hidden" || !navigator.onLine || !listeningRef.current || microphoneMutedRef.current || Date.now() - recognitionActivityAtRef.current < 30000) return;
-        recognitionActivityAtRef.current = Date.now();
+      checkRecognitionHealthRef.current = () => {
+        if (!sessionScopeRef.current.isCurrent(signal) || switchingToFallback || !navigator.onLine || !listeningRef.current || microphoneMutedRef.current) return;
+        const action = recovery.check(Date.now());
+        if (action === "wait") return;
+        if (action === "fallback") { void activateServerFallback(); return; }
         try {
           recognition.abort();
           restartRecognition(900);
         } catch {
           restartRecognition(0);
         }
-      }, 5000);
+      };
+      recognitionWatchdogRef.current = window.setInterval(() => checkRecognitionHealthRef.current(), 5000);
       restartRecognition(0);
       showToast("Sala ao vivo iniciada — pode falar");
     } catch {
@@ -1694,10 +1705,6 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
 
   const toggleMicrophone = () => {
     if (!recording) return;
-    if (pressurePausedRef.current && (pendingBatchesRef.current.length > LIVE_RESUME_LIMIT || fallbackTranscriptionQueueRef.current.length > 2 || wordBufferRef.current.length > LIVE_BATCH_MAX_WORDS)) {
-      showToast("A sinalização ainda está acumulada. Aguarde a fila diminuir para reativar o microfone.");
-      return;
-    }
     const nextMuted = !microphoneMutedRef.current;
     microphoneMutedRef.current = nextMuted;
     if (nextMuted && presentationRef.current.enabled) {
@@ -1714,9 +1721,7 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
       setAvatarStatus(idleLoopActiveRef.current ? "Microfone mutado · loop ativo" : `${avatarNames[avatar]} aguardando em loop`);
       scheduleIdleLoop(0);
     } else {
-      pressurePausedRef.current = false;
       fallbackStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = true; });
-      recognitionActivityAtRef.current = Date.now();
       if (transcriptionEngine === "server") startFallbackChunk();
       else restartRecognitionRef.current(0);
       setAvatarStatus("Microfone reativado");
@@ -1744,8 +1749,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
         const track = stream.getAudioTracks()[0];
         if (!track || track.readyState !== "live") recoverFallbackCaptureRef.current();
         else if (!fallbackRecorderRef.current || fallbackRecorderRef.current.state === "inactive") startFallbackChunk();
-      } else if (recognitionRef.current && Date.now() - recognitionActivityAtRef.current >= 30000) {
-        try { recognitionRef.current.abort(); } catch { restartRecognitionRef.current(0); }
+      } else if (recognitionRef.current) {
+        checkRecognitionHealthRef.current();
       }
       if (avatarReadyRef.current) window.setTimeout(dispatchNextBatch, 100);
     };
