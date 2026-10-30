@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import asyncpg
 import httpx
 from fastapi import HTTPException
+from .dataset_gaps import missing_candidates
 
 
 NEOTALK_API_BASE_URL = os.getenv("NEOTALK_API_BASE_URL", "https://infra-neotalk-api.k3p3ex.easypanel.host").rstrip("/")
@@ -58,6 +59,13 @@ class AgentResponseIncomplete(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class NoValidGlosses(HTTPException):
+    def __init__(self, missing: list[str], response_id: str | None) -> None:
+        super().__init__(status_code=422, detail="O agente não encontrou glosas válidas no catálogo.")
+        self.missing_concepts = missing
+        self.response_id = response_id
 
 
 def integration_status() -> dict:
@@ -165,6 +173,10 @@ async def _get_agent_context(pool: asyncpg.Pool) -> tuple[AgentContext, bool]:
             + " | ".join(catalog)
             + "\n\nPara entradas ao vivo, traduza o trecho como uma unidade de sentido e forme uma sequência contínua de glosas. "
             + "Quando o catálogo permitir, use duas ou mais glosas e evite devolver uma palavra isolada. "
+            + "Em missing_concepts informe apenas conceitos de conteúdo do trecho sem sinal equivalente no catálogo, "
+            + "em português, no infinitivo/singular, com no máximo 12 termos. Use [] quando não houver lacunas. "
+            + "Não liste artigos, pronomes, flexões de uma palavra já disponível, nomes próprios, contatos ou números. "
+            + "Esse campo é somente diagnóstico: nunca substitua uma glosa válida por uma lacuna. "
             + "Responda somente no formato solicitado e mantenha reasoning_summary curto, com no máximo duas frases."
         )
         fingerprint = hashlib.sha256(
@@ -235,9 +247,10 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
                     "type": "object",
                     "properties": {
                         "glosses": {"type": "array", "items": {"type": "string"}},
+                        "missing_concepts": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
                         "reasoning_summary": {"type": "string"},
                     },
-                    "required": ["glosses", "reasoning_summary"],
+                    "required": ["glosses", "reasoning_summary", "missing_concepts"],
                     "additionalProperties": False,
                 },
             }
@@ -282,13 +295,15 @@ async def translate_to_glosses(pool: asyncpg.Pool, text: str) -> dict:
     requested = [str(word).strip().upper() for word in result.get("glosses", []) if str(word).strip()]
     glosses = [word for word in requested if word in context.allowed]
     missing_words = [word for word in requested if word not in context.allowed]
+    concepts = missing_candidates(result.get("missing_concepts", []), context.allowed)
     if not glosses:
-        raise HTTPException(status_code=422, detail="O agente não encontrou glosas válidas no catálogo.")
+        raise NoValidGlosses(concepts, response_payload.get("id"))
     return {
         "source_text": " ".join(text.split()),
         "glosses": glosses,
         "gloss_text": " ".join(glosses),
         "missing_words": missing_words,
+        "missing_concepts": concepts,
         "reasoning_summary": result.get("reasoning_summary", ""),
         "prompt_id": context.prompt["id"],
         "prompt_version": context.prompt["version"],

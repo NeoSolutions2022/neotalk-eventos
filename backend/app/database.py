@@ -198,6 +198,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
     async with pool.acquire() as connection:
         await connection.execute(SCHEMA_SQL)
+        from .dataset_gaps import SCHEMA as DATASET_GAPS_SCHEMA
+        await connection.execute(DATASET_GAPS_SCHEMA)
         from .analytics import SCHEMA as ANALYTICS_SCHEMA
         await connection.execute(ANALYTICS_SCHEMA)
         from .auth import ensure_bootstrap_admin
@@ -208,10 +210,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     reaper = asyncio.create_task(reap_stale_rooms(pool))
     from .analytics import retention_loop
     analytics_retention = asyncio.create_task(retention_loop(pool))
+    from .dataset_gaps import gap_retention_loop
+    gap_retention = asyncio.create_task(gap_retention_loop(pool))
     try:
         yield
     finally:
-        for task in (reaper, analytics_retention):
+        for task in (reaper, analytics_retention, gap_retention):
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
