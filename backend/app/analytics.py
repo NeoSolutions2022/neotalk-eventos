@@ -557,6 +557,22 @@ totals AS (SELECT count(*) events,count(DISTINCT visitor) visitors,count(DISTINC
 names AS (SELECT name,count(*) attempts,count(DISTINCT session) sessions FROM raw GROUP BY name),
 views AS (SELECT step,count(DISTINCT session) sessions FROM raw WHERE name IN ('form_step_view','section_view') GROUP BY step),
 completed AS (SELECT step,count(DISTINCT session) sessions FROM raw WHERE name='form_step_complete' GROUP BY step),
+step_sessions AS (
+ SELECT step,session,bool_or(name='form_step_view') viewed,bool_or(name='form_step_complete') completed
+ FROM raw WHERE $2='access' AND name IN ('form_step_view','form_step_complete') GROUP BY step,session
+),
+step_conversion AS (
+ SELECT step,count(*) viewed_sessions,count(*) FILTER(WHERE completed) completed_sessions
+ FROM step_sessions WHERE viewed GROUP BY step
+),
+submit_sessions AS (
+ SELECT session,bool_or(name='form_submit_attempt') attempted,bool_or(name='lead_submit_accepted') accepted
+ FROM raw WHERE $2='access' AND name IN ('form_submit_attempt','lead_submit_accepted') GROUP BY session
+),
+submit_conversion AS (
+ SELECT count(*) attempted_sessions,count(*) FILTER(WHERE accepted) accepted_sessions
+ FROM submit_sessions WHERE attempted
+),
 active AS (SELECT step,sum((props->>'active_ms')::bigint) ms,count(DISTINCT session) sessions FROM raw WHERE name='active_time' GROUP BY step),
 journeys AS (SELECT session,max(received_at) last_seen,bool_or(name='lead_submit_accepted') accepted FROM raw
  WHERE name IN ('form_view','form_step_view','form_step_complete','form_submit_attempt','lead_submit_accepted','success_view','redirect_initiated','platform_cta_click') GROUP BY session),
@@ -579,6 +595,8 @@ daily AS (SELECT to_char(received_at AT TIME ZONE 'America/Fortaleza','YYYY-MM-D
 SELECT jsonb_build_object(
  'totals',(SELECT row_to_json(t) FROM totals t),'events',(SELECT coalesce(jsonb_agg(n),'[]') FROM names n),
  'views',(SELECT coalesce(jsonb_agg(v),'[]') FROM views v),'completed',(SELECT coalesce(jsonb_agg(v),'[]') FROM completed v),
+ 'step_conversion',(SELECT coalesce(jsonb_agg(v ORDER BY v.step),'[]') FROM step_conversion v),
+ 'submit_conversion',CASE WHEN $2='access' THEN (SELECT row_to_json(s) FROM submit_conversion s) ELSE NULL END,
  'active',(SELECT coalesce(jsonb_agg(v),'[]') FROM active v),'heatmap',(SELECT coalesce(jsonb_agg(v),'[]') FROM heat v),
  'segments',(SELECT coalesce(jsonb_agg(v),'[]') FROM segments v),'campaigns',(SELECT coalesce(jsonb_agg(v),'[]') FROM campaigns v),
  'errors',(SELECT coalesce(jsonb_agg(v),'[]') FROM errors v),'options',(SELECT coalesce(jsonb_agg(v),'[]') FROM options v),

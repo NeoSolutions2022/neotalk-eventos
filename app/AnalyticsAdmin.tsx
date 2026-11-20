@@ -38,6 +38,15 @@ export type Report = {
   events: { name: string; attempts: number; sessions: number }[];
   views: Count[];
   completed: Count[];
+  step_conversion?: {
+    step: string;
+    viewed_sessions: number;
+    completed_sessions: number;
+  }[];
+  submit_conversion?: {
+    attempted_sessions: number;
+    accepted_sessions: number;
+  } | null;
   active: (Count & { ms: number })[];
   heatmap: (Count & {
     device: string;
@@ -238,12 +247,10 @@ export default function AnalyticsAdmin() {
   const events = Object.fromEntries(
     (report?.events || []).map((e) => [e.name, e]),
   );
-  const views = Object.fromEntries(
-    (report?.views || []).map((e) => [e.step, e.sessions]),
+  const stepConversion = Object.fromEntries(
+    (report?.step_conversion || []).map((e) => [e.step, e]),
   );
-  const completed = Object.fromEntries(
-    (report?.completed || []).map((e) => [e.step, e.sessions]),
-  );
+  const submission = report?.submit_conversion;
   const cells =
     report?.heatmap.filter((c) => c.step === step && c.device === device) || [];
   const maxHeat = Math.max(1, ...cells.map((c) => c.clicks));
@@ -343,11 +350,13 @@ export default function AnalyticsAdmin() {
                     "Resposta do webhook, não commit confirmado",
                   ],
                   [
-                    "Conclusão observada",
-                    report.totals.funnel_sessions
-                      ? `${((accepted / report.totals.funnel_sessions) * 100).toFixed(1)}%`
+                    "Aceite entre sessões que tentaram",
+                    submission?.attempted_sessions
+                      ? `${((submission.accepted_sessions / submission.attempted_sessions) * 100).toFixed(1)}%`
                       : "—",
-                    "Envios / sessões com funil autorizado",
+                    submission?.attempted_sessions
+                      ? `${n(submission.accepted_sessions)} de ${n(submission.attempted_sessions)} sessões`
+                      : "Sem base de tentativas no período",
                   ],
                 ].map(([label, value, detail]) => (
                   <article key={label}>
@@ -360,26 +369,35 @@ export default function AnalyticsAdmin() {
               <div className="ana-grid">
                 <Card title="Funil do formulário" eyebrow="CONVERSÃO">
                   <p className="ana-small">
-                    Sessões distintas por etapa; revisitas não duplicam.
+                    De quem viu a etapa no período, quantos também a concluíram.
+                    Revisitas não duplicam sessões.
                   </p>
                   {Object.keys(names)
                     .slice(0, 5)
-                    .map((key) => (
-                      <div className="ana-funnel" key={key}>
-                        <span>
-                          {names[key]}
-                          <small>{n(completed[key])} concluíram</small>
-                        </span>
-                        <div className="ana-track">
-                          <i
-                            style={{
-                              width: `${((views[key] || 0) / Math.max(1, ...Object.values(views))) * 100}%`,
-                            }}
-                          />
+                    .map((key) => {
+                      const row = stepConversion[key];
+                      const rate = row?.viewed_sessions
+                        ? (row.completed_sessions / row.viewed_sessions) * 100
+                        : null;
+                      return (
+                        <div className="ana-funnel" key={key}>
+                          <span>
+                            {names[key]}
+                            <small>
+                              {row?.viewed_sessions
+                                ? `${n(row.completed_sessions)} de ${n(row.viewed_sessions)} concluíram`
+                                : "Sem base de visualizações"}
+                            </small>
+                          </span>
+                          <div className="ana-track">
+                            <i style={{ width: `${rate ?? 0}%` }} />
+                          </div>
+                          <strong>
+                            {rate === null ? "—" : `${rate.toFixed(1)}%`}
+                          </strong>
                         </div>
-                        <strong>{n(views[key])}</strong>
-                      </div>
-                    ))}
+                      );
+                    })}
                   <p className="ana-summary">
                     {n(report.abandonment.in_progress)} em andamento ·{" "}
                     {n(report.abandonment.provisional)} saídas provisórias
