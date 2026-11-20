@@ -47,6 +47,16 @@ export type Report = {
     attempted_sessions: number;
     accepted_sessions: number;
   } | null;
+  data_quality?: {
+    delivery: {
+      observed_events: number;
+      last_received_at: string | null;
+      delayed_events: number;
+      future_clock_events: number;
+    };
+    completions_without_view: Count[] | null;
+    accepts_without_attempt: number | null;
+  };
   active: (Count & { ms: number })[];
   heatmap: (Count & {
     device: string;
@@ -665,6 +675,38 @@ export default function AnalyticsAdmin() {
               </p>
             </Card>
           )}
+          <Card title="Qualidade dos dados" eyebrow="COBERTURA E ATRASO">
+            {!report.data_quality ? (
+              <Empty>Diagnóstico indisponível nesta versão da API.</Empty>
+            ) : !report.data_quality.delivery.observed_events ? (
+              <Empty>Sem eventos observados neste período.</Empty>
+            ) : (
+              <>
+                <Row
+                  label="Último evento recebido"
+                  value={report.data_quality.delivery.last_received_at
+                    ? new Date(report.data_quality.delivery.last_received_at).toLocaleString("pt-BR", {
+                        timeZone: "America/Fortaleza",
+                      })
+                    : "—"}
+                />
+                <Row label="Eventos observados" value={n(report.data_quality.delivery.observed_events)} />
+                <Row label="Recebidos com mais de 5 min de diferença" value={n(report.data_quality.delivery.delayed_events)} />
+                <Row label="Relógio do navegador adiantado mais de 1 min" value={n(report.data_quality.delivery.future_clock_events)} />
+                {report.data_quality.accepts_without_attempt !== null && (
+                  <Row label="Sessões com aceite sem tentativa observada" value={n(report.data_quality.accepts_without_attempt)} />
+                )}
+                {report.data_quality.completions_without_view?.map(({ step, sessions }) => (
+                  <Row key={step} label={`${names[step] || step}: conclusão sem visualização`} value={n(sessions)} />
+                ))}
+                <p className="ana-small">
+                  Os pares ausentes podem indicar perda de eventos ou o corte do período.
+                  A diferença de horário inclui atraso e relógio incorreto; não mede latência de rede.
+                  Estes números não estimam visitas sem consentimento.
+                </p>
+              </>
+            )}
+          </Card>
           <footer className="ana-small">
             Atualizado em{" "}
             {new Date(report.generated_at).toLocaleString("pt-BR", {

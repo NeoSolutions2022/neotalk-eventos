@@ -573,6 +573,15 @@ submit_conversion AS (
  SELECT count(*) attempted_sessions,count(*) FILTER(WHERE accepted) accepted_sessions
  FROM submit_sessions WHERE attempted
 ),
+delivery_quality AS (
+ SELECT count(*) observed_events,max(received_at) last_received_at,
+ count(*) FILTER(WHERE received_at-occurred_at>interval '5 minutes') delayed_events,
+ count(*) FILTER(WHERE occurred_at-received_at>interval '1 minute') future_clock_events
+ FROM raw
+),
+stage_gaps AS (
+ SELECT step,count(*) sessions FROM step_sessions WHERE completed AND NOT viewed GROUP BY step
+),
 active AS (SELECT step,sum((props->>'active_ms')::bigint) ms,count(DISTINCT session) sessions FROM raw WHERE name='active_time' GROUP BY step),
 journeys AS (SELECT session,max(received_at) last_seen,bool_or(name='lead_submit_accepted') accepted FROM raw
  WHERE name IN ('form_view','form_step_view','form_step_complete','form_submit_attempt','lead_submit_accepted','success_view','redirect_initiated','platform_cta_click') GROUP BY session),
@@ -597,6 +606,13 @@ SELECT jsonb_build_object(
  'views',(SELECT coalesce(jsonb_agg(v),'[]') FROM views v),'completed',(SELECT coalesce(jsonb_agg(v),'[]') FROM completed v),
  'step_conversion',(SELECT coalesce(jsonb_agg(v ORDER BY v.step),'[]') FROM step_conversion v),
  'submit_conversion',CASE WHEN $2='access' THEN (SELECT row_to_json(s) FROM submit_conversion s) ELSE NULL END,
+ 'data_quality',jsonb_build_object(
+   'delivery',(SELECT row_to_json(q) FROM delivery_quality q),
+   'completions_without_view',CASE WHEN $2='access' THEN
+     (SELECT coalesce(jsonb_agg(g ORDER BY g.step),'[]') FROM stage_gaps g) ELSE NULL END,
+   'accepts_without_attempt',CASE WHEN $2='access' THEN
+     (SELECT count(*) FROM submit_sessions WHERE accepted AND NOT attempted) ELSE NULL END
+ ),
  'active',(SELECT coalesce(jsonb_agg(v),'[]') FROM active v),'heatmap',(SELECT coalesce(jsonb_agg(v),'[]') FROM heat v),
  'segments',(SELECT coalesce(jsonb_agg(v),'[]') FROM segments v),'campaigns',(SELECT coalesce(jsonb_agg(v),'[]') FROM campaigns v),
  'errors',(SELECT coalesce(jsonb_agg(v),'[]') FROM errors v),'options',(SELECT coalesce(jsonb_agg(v),'[]') FROM options v),

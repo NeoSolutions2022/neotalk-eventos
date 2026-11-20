@@ -59,6 +59,10 @@ Visitantes são navegadores estimados, não pessoas únicas. Denominador da conc
 
 lead_submit_accepted é resposta HTTP aceita pelo webhook, não confirmação transacional do CRM. Clique/redirecionamento não confirma chegada ou criação de conta. Localidade desconhecida nesta fase, sem GPS/consulta externa. Não há ainda correlação determinística com conta, métricas das telas da plataforma ou e-mail semanal. Analytics de browser pode ser forjado/perdido/bloqueado: não é fonte contábil nem prova de identidade ou atenção.
 
+### Diagnóstico de cobertura do relatório (ANA-03)
+
+O admin recebe `data_quality` por origem e janela de **recepção**. Inclui total de eventos efetivamente armazenados, último recebimento, diferença entre recebimento e horário do navegador acima de cinco minutos e eventos com horário do navegador mais de um minuto no futuro. No /acesso, mostra também sessões com conclusão sem visualização por etapa e aceite sem tentativa na janela. Isso pode indicar corte de período, perda ou eventos fora de ordem; a diferença de horário não isola latência de rede. O relatório não estima visitantes não observados nem conta requisições rejeitadas como eventos. Nada novo é coletado, e o diagnóstico não expõe UUIDs, payload bruto ou dados de CRM.
+
 ## Privacidade
 
 Coleta só após preferência granular, com recusa equivalente e sem bloquear cadastro. Respeitar GPC/DNT. Sem nome, e-mail, telefone, empresa, áudio, transcrição, senha, cookie ou ticket no stream. Preferências de analytics são separadas do checkbox de novidades existente. Retirada para futuras coletas não apaga retroativamente dados; implementar procedimento operacional de exclusão autorizado. Revisar finalidade/aviso com responsável de privacidade antes de ativar. Sem fingerprinting, pixels de anúncios ou gravação de sessão.
