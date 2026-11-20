@@ -485,5 +485,51 @@ class AnalyticsPostgresTests(unittest.TestCase):
         self.assertEqual(self.post(self.landing()).json()["accepted"], 0)
 
 
+    def test_14_conversion_intersects_sessions_within_the_period(self):
+        for names in [
+            ("form_step_view", "form_step_view", "form_step_complete",
+             "form_step_complete", "form_submit_attempt", "form_submit_attempt",
+             "lead_submit_accepted"),
+            ("form_step_view", "form_submit_attempt"),
+            ("form_step_complete", "lead_submit_accepted"),
+            ("form_step_complete", "lead_submit_accepted"),
+        ]:
+            payload = batch()
+            payload["events"] = [
+                batch(name, "contato")["events"][0] for name in names
+            ]
+            self.assertEqual(self.post(payload).json()["accepted"], len(names))
+        # An old view/attempt in the same session must not qualify a current completion.
+        previous = batch()
+        previous["events"] = [
+            batch(name, "volume_mensal")["events"][0]
+            for name in ("form_step_view", "form_submit_attempt")
+        ]
+        self.assertEqual(self.post(previous).json()["accepted"], 2)
+        asyncio.run(sql(
+            "UPDATE analytics_events SET received_at=now()-interval '8 days' WHERE session=$1",
+            previous["session"],
+        ))
+        previous["events"] = [
+            batch(name, "volume_mensal")["events"][0]
+            for name in ("form_step_complete", "lead_submit_accepted")
+        ]
+        self.assertEqual(self.post(previous).json()["accepted"], 2)
+        self.assertEqual(
+            self.post(batch("form_step_view", "prazo_de_interesse")).json()["accepted"], 1
+        )
+        r = self.report()
+        self.assertEqual(r["step_conversion"], [
+            {"step": "contato", "viewed_sessions": 2, "completed_sessions": 1},
+            {"step": "prazo_de_interesse", "viewed_sessions": 1, "completed_sessions": 0},
+        ])
+        self.assertEqual(r["submit_conversion"], {
+            "attempted_sessions": 2, "accepted_sessions": 1,
+        })
+        landing = self.landing_report()
+        self.assertEqual(landing["step_conversion"], [])
+        self.assertIsNone(landing["submit_conversion"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
