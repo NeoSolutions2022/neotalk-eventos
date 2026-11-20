@@ -531,5 +531,36 @@ class AnalyticsPostgresTests(unittest.TestCase):
         self.assertIsNone(landing["submit_conversion"])
 
 
+    def test_15_quality_is_aggregate_source_scoped_and_explicit_when_empty(self):
+        empty = self.report()["data_quality"]
+        self.assertEqual(empty["delivery"], {
+            "observed_events": 0, "last_received_at": None,
+            "delayed_events": 0, "future_clock_events": 0,
+        })
+        delayed = batch("form_step_complete", "contato")
+        delayed["events"][0]["at"] -= 360_000
+        ahead = batch("lead_submit_accepted", "contato")
+        ahead["events"][0]["at"] += 120_000
+        self.assertEqual(self.post(delayed).json()["accepted"], 1)
+        self.assertEqual(self.post(ahead).json()["accepted"], 1)
+        self.assertEqual(self.post(ahead).json()["accepted"], 0)
+        q = self.report()["data_quality"]
+        self.assertEqual(q["delivery"]["observed_events"], 2)
+        self.assertEqual(q["delivery"]["delayed_events"], 1)
+        self.assertEqual(q["delivery"]["future_clock_events"], 1)
+        self.assertIsNotNone(q["delivery"]["last_received_at"])
+        self.assertEqual(q["completions_without_view"], [{"step": "contato", "sessions": 1}])
+        self.assertEqual(q["accepts_without_attempt"], 1)
+        serialized = json.dumps(q)
+        for payload in (delayed, ahead):
+            self.assertNotIn(payload["visitor"], serialized)
+            self.assertNotIn(payload["session"], serialized)
+            self.assertNotIn(payload["events"][0]["id"], serialized)
+        landing = self.landing_report()["data_quality"]
+        self.assertEqual(landing["delivery"], empty["delivery"])
+        self.assertIsNone(landing["completions_without_view"])
+        self.assertIsNone(landing["accepts_without_attempt"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

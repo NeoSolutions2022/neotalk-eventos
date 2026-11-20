@@ -344,6 +344,14 @@ export async function runBrowser({ root, python, databaseUrl }) {
     );
     await page.getByRole("button", { name: "Atualizar", exact: true }).click();
     await page.getByText("3", { exact: true }).first().waitFor();
+    await page.getByRole("heading", { name: "Qualidade dos dados" }).waitFor();
+    await page.getByText("Último evento recebido", { exact: true }).waitFor();
+    check(
+      report.data_quality.delivery.observed_events === report.totals.events &&
+        report.data_quality.accepts_without_attempt === 0 &&
+        report.data_quality.completions_without_view.length === 0,
+      "the dashboard renders the coverage audit for matching browser journeys",
+    );
     await page
       .locator(".ana-scope")
       .evaluate((e) => e.prepend("HOMOLOGAÇÃO LOCAL · DADOS SINTÉTICOS — "));
