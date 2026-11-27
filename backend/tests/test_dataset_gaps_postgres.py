@@ -1,5 +1,7 @@
 """Integration checks on the disposable localhost PostgreSQL harness only."""
 import asyncio
+import csv
+import io
 import os
 import secrets
 import unittest
@@ -100,6 +102,39 @@ class DatasetGapsPostgresTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/admin/dataset-gaps").status_code, 403)
         self.client.cookies.set(COOKIE_NAME, self.admin)
         self.assertEqual(self.client.get("/api/v1/admin/dataset-gaps?page_size=1000").status_code, 422)
+
+    def test_csv_exports_full_filtered_list_only_for_admin(self):
+        path = "/api/v1/admin/dataset-gaps/export.csv"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.client.cookies.set(COOKIE_NAME, self.user)
+        self.assertEqual(self.client.get(path).status_code, 403)
+        self.client.cookies.set(COOKIE_NAME, self.admin)
+        asyncio.run(sql("INSERT INTO pose_words(word) VALUES('PRESENTE')"))
+        recent, old = uuid4(), uuid4()
+        asyncio.run(sql("""
+            INSERT INTO dataset_live_coverage(observation_id,checked,covered,observed_at)
+            VALUES ($1,6,0,NOW()),($2,1,0,NOW()-INTERVAL '31 days')
+        """, recent, old))
+        asyncio.run(sql("""
+            INSERT INTO dataset_live_missing(observation_id,term_key,term,occurrences)
+            VALUES ($1,'ACAO','AÇÃO',3),($1,'AVIAO','AVIÃO',1),
+                   ($1,'PRESENTE','PRESENTE',1),($1,'FORMULA','=1+1',1),($2,'ANTIGA','ANTIGA',1)
+        """, recent, old))
+        response = self.client.get(path, params={"page_size": 1})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertTrue(response.content.startswith(b"\xef\xbb\xbf"))
+        def rows(result):
+            return list(csv.DictReader(io.StringIO(result.content.decode("utf-8-sig")), delimiter=";"))
+        self.assertEqual({row["Palavra"]: row["Ocorrências"] for row in rows(response)},
+                         {"AÇÃO": "3", "AVIÃO": "1", "'=1+1": "1"})
+        self.assertEqual([row["Palavra"] for row in rows(self.client.get(path, params={"search": "acao"}))], ["AÇÃO"])
+        self.assertEqual(rows(self.client.get(path, params={"search": "%"})), [])
+        self.record(["DÚVIDA"], "qa-csv", "quality")
+        suggestions = rows(self.client.get(path, params={"observed_live": "false"}))
+        self.assertEqual(suggestions[0]["Palavra"], "DÚVIDA")
+        self.assertEqual(suggestions[0]["Sugestões no QA"], "1")
 
     def test_migration_is_idempotent(self):
         async def run():

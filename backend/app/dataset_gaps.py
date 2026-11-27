@@ -1,5 +1,7 @@
 """Aggregate vocabulary candidates, never whole transcripts or audio."""
 import asyncio
+import csv
+import io
 import logging
 import re
 import unicodedata
@@ -7,13 +9,14 @@ from collections import Counter
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from .auth import CurrentUser, admin_user
 from .database import get_pool
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/dataset-gaps", tags=["dataset"])
+EXPORT_LIMIT = 25_000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS dataset_missing_terms (
@@ -174,6 +177,65 @@ async def gap_retention_loop(pool: asyncpg.Pool) -> None:
             log.warning("dataset_gap_retention_failed")
 
 
+async def query_missing_terms(pool, available, search, observed_live, limit, offset):
+    pattern = term_key(search).translate(str.maketrans({"\\": "\\\\", "_": "\\_", "%": "\\%"}))
+    if observed_live:
+        return await pool.fetch("""
+            SELECT MIN(m.term) AS term, SUM(m.occurrences)::BIGINT AS occurrences,
+                   MAX(c.observed_at) AS last_seen_at, COUNT(*) OVER() AS total
+            FROM dataset_live_missing m JOIN dataset_live_coverage c USING(observation_id)
+            WHERE c.observed_at >= NOW()-INTERVAL '30 days'
+              AND NOT (m.term_key=ANY($1::TEXT[])) AND m.term_key LIKE '%' || $2 || '%'
+            GROUP BY m.term_key
+            ORDER BY occurrences DESC, last_seen_at DESC, m.term_key
+            LIMIT $3 OFFSET $4
+        """, available, pattern, limit, offset)
+    return await pool.fetch("""
+        SELECT term,occurrences,live_occurrences,quality_occurrences,first_seen_at,last_seen_at,
+               COUNT(*) OVER() AS total
+        FROM dataset_missing_terms
+        WHERE NOT (term_key=ANY($1::TEXT[])) AND term_key LIKE '%' || $2 || '%'
+        ORDER BY occurrences DESC, last_seen_at DESC, term_key
+        LIMIT $3 OFFSET $4
+    """, available, pattern, limit, offset)
+
+
+@router.get("/export.csv")
+async def export_missing_terms(
+    search: str = Query("", max_length=96),
+    observed_live: bool = True,
+    pool: asyncpg.Pool = Depends(get_pool),
+    _: CurrentUser = Depends(admin_user),
+) -> Response:
+    catalog = await pool.fetch("SELECT word FROM pose_words")
+    rows = await query_missing_terms(pool, [term_key(row["word"]) for row in catalog],
+                                    search, observed_live, EXPORT_LIMIT + 1, 0)
+    if len(rows) > EXPORT_LIMIT:
+        raise HTTPException(422, detail="A lista é muito grande. Use a busca para limitar a exportação.")
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";")
+    header = ["Palavra", "Ocorrências", "Última ocorrência (UTC)"]
+    if not observed_live:
+        header += ["Sugestões na tradução", "Sugestões no QA"]
+    writer.writerow(header)
+    for row in rows:
+        term = row["term"].replace("_", " ")
+        # Protect spreadsheet programs even if legacy data bypassed ingestion validation.
+        if term.startswith(("\t", "\r", "\n")) or term.lstrip().startswith(("=", "+", "-", "@")):
+            term = "'" + term
+        fields = [term, row["occurrences"], row["last_seen_at"].isoformat()]
+        if not observed_live:
+            fields += [row["live_occurrences"], row["quality_occurrences"]]
+        writer.writerow(fields)
+    name = "palavras-ausentes-ao-vivo" if observed_live else "sugestoes-dataset"
+    return Response(
+        output.getvalue().encode("utf-8-sig"),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="neotalk-{name}.csv"',
+                 "Cache-Control": "no-store"},
+    )
+
+
 @router.get("")
 async def list_missing_terms(
     page: int = Query(1, ge=1, le=100000),
@@ -186,32 +248,14 @@ async def list_missing_terms(
     # Compare against the current synchronized catalog, not the agent's TTL cache.
     catalog = await pool.fetch("SELECT word FROM pose_words")
     available = [term_key(row["word"]) for row in catalog]
+    rows = await query_missing_terms(pool, available, search, observed_live, page_size, (page-1)*page_size)
+    result = {"items": [{k:v for k,v in dict(row).items() if k != "total"} for row in rows],
+              "page": page, "page_size": page_size, "has_next": bool(rows and rows[0]["total"] > page*page_size)}
     if observed_live:
         summary = await pool.fetchrow("""
             SELECT COUNT(*) AS batches, COALESCE(SUM(checked),0)::BIGINT AS checked,
                    COALESCE(SUM(covered),0)::BIGINT AS covered
             FROM dataset_live_coverage WHERE observed_at >= NOW()-INTERVAL '30 days'
         """)
-        rows = await pool.fetch("""
-            SELECT MIN(m.term) AS term, SUM(m.occurrences)::BIGINT AS occurrences,
-                   MAX(c.observed_at) AS last_seen_at, COUNT(*) OVER() AS total
-            FROM dataset_live_missing m JOIN dataset_live_coverage c USING(observation_id)
-            WHERE c.observed_at >= NOW()-INTERVAL '30 days'
-              AND NOT (m.term_key=ANY($1::TEXT[])) AND m.term_key LIKE '%' || $2 || '%'
-            GROUP BY m.term_key
-            ORDER BY occurrences DESC, last_seen_at DESC, m.term_key
-            LIMIT $3 OFFSET $4
-        """, available, term_key(search).replace("_", "\\_"), page_size, (page-1)*page_size)
-        return {"items": [{k:v for k,v in dict(row).items() if k != "total"} for row in rows],
-                "coverage": {**dict(summary), "days": 30},
-                "page": page, "page_size": page_size, "has_next": bool(rows and rows[0]["total"] > page*page_size)}
-    rows = await pool.fetch("""
-        SELECT term,occurrences,live_occurrences,quality_occurrences,first_seen_at,last_seen_at,
-               COUNT(*) OVER() AS total
-        FROM dataset_missing_terms
-        WHERE NOT (term_key=ANY($1::TEXT[])) AND term_key LIKE '%' || $2 || '%'
-        ORDER BY occurrences DESC, last_seen_at DESC, term_key
-        LIMIT $3 OFFSET $4
-    """, available, term_key(search).replace("_", "\\_"), page_size, (page-1)*page_size)
-    return {"items": [{k:v for k,v in dict(row).items() if k != "total"} for row in rows],
-            "page": page, "page_size": page_size, "has_next": bool(rows and rows[0]["total"] > page*page_size)}
+        result["coverage"] = {**dict(summary), "days": 30}
+    return result
