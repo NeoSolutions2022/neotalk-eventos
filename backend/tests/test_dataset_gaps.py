@@ -1,15 +1,25 @@
 import unittest
 from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from uuid import uuid4
 
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
-from app.dataset_gaps import missing_candidates, record_missing_terms
+from app.dataset_gaps import measure_vocabulary, missing_candidates, record_missing_terms
 from app.main import agent_translate
 from app.schemas import AgentTranslateIn
 from app.services import NoValidGlosses
 
 
 class CandidateTests(unittest.TestCase):
+    def test_live_counts_all_words_and_repeats_with_compounds_and_privacy(self):
+        self.assertEqual(
+            measure_vocabulary("Eu: bom dia! dúvida, acompanho acompanho de foo@bar.test https://site.test X123 9999",
+                               ["BOM_DIA", "DUVIDA", "EU"]),
+            (7, 4, {"ACOMPANHO": ("ACOMPANHO", 2), "DE": ("DE", 1)}),
+        )
+        self.assertEqual(measure_vocabulary("bom. dia", ["BOM_DIA"])[1], 0)
+
     def test_normalizes_duplicates_and_excludes_available_terms(self):
         self.assertEqual(missing_candidates(["acompanhar", "ACOMPANHAR", "dúvida", "perguntar dúvida"],
                                           frozenset({"DÚVIDA", "PERGUNTAR_DÚVIDA"})), ["ACOMPANHAR"])
@@ -40,7 +50,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
         tasks = BackgroundTasks()
         result = {"gloss_text": "EU", "missing_concepts": ["ACOMPANHAR"], "openai_response_id": "r1"}
         with patch("app.main.translate_to_glosses", AsyncMock(return_value=result)):
-            self.assertEqual(await agent_translate(AgentTranslateIn(text="Eu vou acompanhar"), tasks, pool, None), result)
+            self.assertEqual(await agent_translate(AgentTranslateIn(text="Eu vou acompanhar"), None, tasks, pool, None), result)
         pool.execute.assert_not_awaited()
         await tasks()
         pool.execute.assert_awaited_once()
@@ -49,7 +59,21 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
         pool = AsyncMock()
         tasks = BackgroundTasks()
         with patch("app.main.translate_to_glosses", AsyncMock(side_effect=NoValidGlosses(["ACOMPANHAR"], "r2"))):
-            result = await agent_translate(AgentTranslateIn(text="Acompanhar"), tasks, pool, None)
+            result = await agent_translate(AgentTranslateIn(text="Acompanhar"), None, tasks, pool, None)
         self.assertTrue(result["skipped"])
         await tasks()
         self.assertEqual(pool.execute.call_args.args[1], "r2")
+
+    async def test_live_observation_persists_even_when_agent_returns_502(self):
+        pool = AsyncMock()
+        tasks = BackgroundTasks()
+        payload = AgentTranslateIn(text="Eu acompanho", live_observation_id=uuid4())
+        user = SimpleNamespace(id=uuid4())
+        with patch("app.main.translate_to_glosses", AsyncMock(side_effect=HTTPException(502, "offline"))), \
+             patch("app.main.record_live_coverage", AsyncMock()) as record:
+            response = await agent_translate(payload, None, tasks, pool, user)
+            self.assertEqual(response.status_code, 502)
+            record.assert_not_awaited()
+            await response.background()
+            record.assert_awaited_once()
+            self.assertEqual(record.call_args.args[1], "Eu acompanho")

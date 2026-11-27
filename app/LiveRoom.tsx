@@ -596,13 +596,14 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
     refreshBatchView();
     const signal = sessionScopeRef.current.signal;
     const translationStartedAt = Date.now();
+    const liveObservationId = window.crypto?.randomUUID?.();
     let translationAttempt = 0;
     const request = retryLiveRequest(() => {
       recordPoseDiagnostic("principal", { type: "neotalk:translation-request", attempt: ++translationAttempt }, batch.id);
       return roomApi<AgentTranslation>("/agent/translate", {
       method: "POST",
       signal,
-      body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null }),
+      body: JSON.stringify({ text: batch.text, batch_id: remoteBatchIdsRef.current.get(batch.id) || null, live_observation_id: liveObservationId }),
       });
     }, signal).then((agent) => {
       if (!sessionScopeRef.current.isCurrent(signal)) return;

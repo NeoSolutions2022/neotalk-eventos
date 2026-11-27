@@ -3,11 +3,12 @@ import asyncio
 import os
 import secrets
 import unittest
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from app.auth import COOKIE_NAME, token_hash
-from app.dataset_gaps import SCHEMA, record_missing_terms
+from app.dataset_gaps import SCHEMA, record_live_coverage, record_missing_terms
 from app.main import app
 from test_analytics_postgres import URL, sql
 import asyncpg
@@ -28,7 +29,7 @@ class DatasetGapsPostgresTests(unittest.TestCase):
         cls.context.__exit__(None, None, None)
 
     def setUp(self):
-        asyncio.run(sql("TRUNCATE dataset_missing_terms,dataset_missing_observations,pose_words"))
+        asyncio.run(sql("TRUNCATE dataset_missing_terms,dataset_missing_observations,pose_words,dataset_live_coverage,dataset_live_missing"))
         self.client.cookies.clear()
 
     def record(self, terms, observation, source="live"):
@@ -45,6 +46,29 @@ class DatasetGapsPostgresTests(unittest.TestCase):
         response = self.client.get("/api/v1/admin/dataset-gaps", params=params)
         self.assertEqual(response.status_code, 200)
         return response.json()
+
+    def test_live_coverage_counts_repetitions_dedupes_and_keeps_historical_ratio(self):
+        async def run():
+            pool = await asyncpg.create_pool(URL, min_size=1, max_size=4)
+            try:
+                await record_live_coverage(pool, "Antes da sincronização", uuid4())
+                await pool.execute("INSERT INTO pose_words(word) VALUES('EU'),('BOM_DIA')")
+                observation = uuid4()
+                await asyncio.gather(*(record_live_coverage(pool, "Eu bom dia, acompanho acompanho", observation) for _ in range(8)))
+                await record_live_coverage(pool, "Eu", uuid4())
+            finally:
+                await pool.close()
+        asyncio.run(run())
+        report = self.report(observed_live="true")
+        self.assertEqual(report["coverage"], {"batches": 2, "checked": 6, "covered": 4, "days": 30})
+        self.assertEqual([(item["term"], item["occurrences"]) for item in report["items"]], [("ACOMPANHO", 2)])
+        self.assertEqual(self.report()["items"], [])  # model suggestions remain separate
+        asyncio.run(sql("INSERT INTO pose_words(word) VALUES('ACOMPANHO')"))
+        updated = self.report(observed_live="true")
+        self.assertEqual(updated["items"], [])
+        self.assertEqual(updated["coverage"], report["coverage"])
+        asyncio.run(sql("UPDATE dataset_live_coverage SET observed_at=NOW()-INTERVAL '31 days'"))
+        self.assertEqual(self.report(observed_live="true")["coverage"]["checked"], 0)
 
     def test_actual_upsert_deduplicates_observations_and_counts_origins(self):
         self.record(["ACOMPANHAR"], "same-batch")

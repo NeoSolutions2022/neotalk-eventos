@@ -1,15 +1,16 @@
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import asyncpg
 from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exception_handlers import http_exception_handler
 
 from .database import expire_stale_rooms, get_pool, lifespan
 from .dataset_pdf import build_dataset_pdf
-from .dataset_gaps import record_missing_terms, router as dataset_gaps_router
+from .dataset_gaps import record_live_coverage, record_missing_terms, router as dataset_gaps_router
 from .auth import (
     COOKIE_NAME, CurrentUser, admin_csrf, admin_user, create_session, csrf_user,
     current_user, enforce_rate_limit, hash_password, normalize_email, normalize_phone,
@@ -383,17 +384,29 @@ async def download_pose_words_pdf(pool: asyncpg.Pool = Depends(get_pool), _: Cur
 
 
 @app.post("/api/v1/agent/translate")
-async def agent_translate(payload: AgentTranslateIn, background_tasks: BackgroundTasks, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
+async def agent_translate(payload: AgentTranslateIn, request: Request, background_tasks: BackgroundTasks, pool: asyncpg.Pool = Depends(get_pool), user: CurrentUser = Depends(csrf_user)) -> dict:
     if payload.batch_id and not await pool.fetchval(
         "SELECT b.id FROM translation_batches b JOIN rooms r ON r.id=b.room_id WHERE b.id=$1 AND (r.user_id=$2 OR $3='admin')",
         payload.batch_id, user.id, user.role,
     ):
         raise HTTPException(status_code=404, detail="Lote não encontrado.")
+    observation = (
+        uuid5(NAMESPACE_URL, f"neotalk-live:{user.id}:{payload.live_observation_id}")
+        if payload.live_observation_id else payload.batch_id
+    )
+    if observation:
+        background_tasks.add_task(record_live_coverage, pool, payload.text, observation)
     try:
         result = await translate_to_glosses(pool, payload.text)
     except HTTPException as exception:
         if exception.status_code != status.HTTP_422_UNPROCESSABLE_ENTITY:
-            raise
+            # Exception handlers replace the response and drop its background tasks.
+            # Preserve the original status and headers, but let measurement run.
+            if not observation:
+                raise
+            response = await http_exception_handler(request, exception)
+            response.background = background_tasks
+            return response
         if isinstance(exception, NoValidGlosses):
             background_tasks.add_task(record_missing_terms, pool, exception.missing_concepts,
                                       str(payload.batch_id or exception.response_id or ""), "live")

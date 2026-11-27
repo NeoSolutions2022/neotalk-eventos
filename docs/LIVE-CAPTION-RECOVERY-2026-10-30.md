@@ -29,6 +29,10 @@ Essas causas reproduzem mecanismos compatíveis com o relato. Não foi capturado
 
 ## Sinais a adicionar ao dataset
 
+O admin em **Qualidade → Cobertura do dataset · sala ao vivo** agora exibe, por padrão, palavras observadas nos 30 dias mais recentes. A taxa é ocorrências cobertas pelo catálogo sincronizado / ocorrências de palavras verificadas. Expressões compostas são consideradas e a comparação ignora diferenças de caixa e acentuação; flexões ou sinônimos que não correspondem literalmente não são considerados cobertos. A métrica não valida a qualidade da tradução nem a execução do avatar.
+
+Cada lote submetido ao agente tem um identificador de observação estável para retentativas. Repetições reais da palavra contam; reenvio do lote não. A gravação é feita em segundo plano, separada da tradução, inclusive quando o agente não produz glosas ou retorna um erro HTTP tratado. Não reprocessa histórico e não cria falsos zeros quando o catálogo está vazio. A coleta nova mantém totais por lote e termos isolados com suas frequências, não frases completas; contatos digitais, URLs e identificadores com números são excluídos. O armazenamento vence após 90 dias. As sugestões anteriores permanecem na opção **Sugestões do agente (histórico)** e não entram na taxa.
+
 - Mesma base PostgreSQL da plataforma: `dataset_missing_terms` agrega frequência e datas; `dataset_missing_observations` evita contar duas vezes o mesmo termo na mesma observação/lote.
 - O agente informa até 12 `missing_concepts` na mesma resposta estruturada. Não existe segunda chamada de IA para coleta.
 - Conceitos são candidatos para revisão do QA, não prova de ausência de equivalência semântica. Glosas inválidas da saída permanecem separadas de lacunas de vocabulário.

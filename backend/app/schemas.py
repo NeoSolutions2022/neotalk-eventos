@@ -105,6 +105,7 @@ class RoomDetail(RoomOut):
 class AgentTranslateIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     batch_id: UUID | None = None
+    live_observation_id: UUID | None = None
 
 
 class PromptCreate(BaseModel):
