@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useScreenWakeLock } from "./useScreenWakeLock";
 import { ApiError, apiRequest } from "./apiClient";
 import { isNonBlockingAvatarError } from "./avatarMessages";
 import { avatarCaptureConstraints, avatarRecorderOptions, captureDetails, VideoFrameFormat, VideoQuality, videoFramePresets, videoQualityPresets } from "./avatarVideoQuality";
@@ -36,6 +37,7 @@ export default function VideoStudio({ showToast }: { showToast: (message: string
   const [busy, setBusy] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  useScreenWakeLock(busy || capturing || Boolean(gloss));
   const [quality, setQuality] = useState<VideoQuality>("high");
   const [format, setFormat] = useState<VideoFrameFormat>("landscape");
   const [status, setStatus] = useState("Carregando avatar 3D…");
@@ -72,6 +74,10 @@ export default function VideoStudio({ showToast }: { showToast: (message: string
       } else if (data.type === "neotalk:status" && data.status) {
         setStatus(data.status);
       } else if (data.type === "neotalk:playing") {
+        if (!phraseRef.current && !captureRef.current) {
+          frameRef.current?.contentWindow?.postMessage({ type: "neotalk:pause" }, widgetOrigin);
+          return;
+        }
         setStatus(`${avatarNames[avatar]} sinalizando`);
         clearLoop();
         const words = Array.isArray(data.words) ? data.words.length : phraseRef.current.split(/\s+/).filter(Boolean).length;
@@ -229,6 +235,13 @@ export default function VideoStudio({ showToast }: { showToast: (message: string
         <h2>O que o avatar vai sinalizar?</h2>
         <label>Texto em português<textarea rows={5} maxLength={2000} required value={text} onChange={(event) => setText(event.target.value)} placeholder="Digite a frase do seu vídeo…" /></label>
         <button type="submit" className="primary" disabled={busy || capturing || !text.trim()}>{busy ? "Traduzindo…" : "Gerar sinalização"}</button>
+        {gloss && !stageOpen && <button type="button" className="secondary" disabled={busy || capturing} onClick={() => {
+          clearLoop();
+          phraseRef.current = "";
+          setGloss("");
+          frameRef.current?.contentWindow?.postMessage({ type: "neotalk:pause" }, widgetOrigin);
+          setStatus("Prévia encerrada");
+        }}>Encerrar prévia</button>}
         {gloss && <div className="gloss-result"><span>GLOSAS</span><strong>{gloss}</strong></div>}
         <p className="video-studio-note">Nesta versão, o vídeo é criado a partir de texto. Envio de um arquivo de vídeo original ficará para uma próxima etapa.</p>
       </form>
