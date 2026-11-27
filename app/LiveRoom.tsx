@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useScreenWakeLock } from "./useScreenWakeLock";
 import type { CSSProperties } from "react";
 import { isNonBlockingAvatarError, isRetryableAvatarError } from "./avatarMessages";
 import { ApiError, apiRequest } from "./apiClient";
@@ -184,6 +185,8 @@ export default function LiveRoom({ recording, setRecording, time, showToast, dia
   const [roomName, setRoomName] = useState("Evento institucional 2026");
   const [backendStatus, setBackendStatus] = useState("Verificando histórico");
   const [externalPlayerMode, setExternalPlayerMode] = useState<"pip" | "window" | null>(null);
+  useScreenWakeLock(starting || recording);
+  useScreenWakeLock(Boolean(externalPlayerMode) && (starting || recording), externalWindowRef);
   const [cameraGuideOpen, setCameraGuideOpen] = useState(false);
   const [widgetUrl] = useState(() => {
     const url = new URL(avatarWidgetBase);

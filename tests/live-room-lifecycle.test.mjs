@@ -8,7 +8,8 @@ import ts from 'typescript';
 import { playbackComplete } from '../app/playbackCompletion.mjs';
 const compilerOptions = { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX };
 const sources = {};
-for (const name of ['LiveRoom', 'liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
+const supportModules = ['liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck', 'screenWakeLock', 'useScreenWakeLock'];
+for (const name of ['LiveRoom', ...supportModules]) {
   sources[name] = await readFile(new URL(`../app/${name}.${name === 'LiveRoom' ? 'tsx' : 'ts'}`, import.meta.url), 'utf8');
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
@@ -39,7 +40,9 @@ function harness(handler = async path => path === '/rooms' ? { id: 'room-qa' } :
     './apiClient': { ApiError, apiRequest: async (path, options = {}) => { calls.push({ path, options }); return handler(path, options); } },
   };
   context.require = name => modules[name];
-  for (const name of ['liveResilience', 'liveTiming', 'avatarMessages', 'presentationDeck']) {
+  window.document = context.document;
+  window.navigator = context.navigator;
+  for (const name of supportModules) {
     context.exports = {};
     // Each CommonJS module owns its exports binding; global reuse breaks
     // functions that refer to other exports of their own module.
